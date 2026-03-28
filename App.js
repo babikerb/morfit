@@ -35,17 +35,16 @@ const STYLES = [
 ];
 
 const C = {
-  bg:        '#e8e4de',
-  surface:   '#dedad2',
-  elevated:  '#f0ede8',
-  border:    '#cac4bc',
-  text:      '#1e1b18',
-  textMid:   '#6b5e52',
-  textFaint: '#a8998e',
-  camBg:     '#18160f',
-  camText:   '#f0ede8',
-  done:      '#6e9e7a',
-  record:    '#c06050',
+  bg:        '#080808',
+  surface:   '#111111',
+  elevated:  '#1a1a1a',
+  border:    '#252525',
+  text:      '#efefef',
+  textMid:   '#787878',
+  textFaint: '#3a3a3a',
+  accent:    '#5fc8ff',
+  done:      '#5fc8ff',
+  record:    '#e05555',
 };
 
 const CARD_W = (SW - 40 - 12) / 2;
@@ -295,7 +294,7 @@ export default function App() {
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
-      <StatusBar style="dark" />
+      <StatusBar style="light" />
 
       <Animated.View style={{ flex: 1, transform: [{ translateX: slideAnim }] }}>
 
@@ -319,13 +318,13 @@ export default function App() {
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[s.modeCard, s.modeCardDark]}
+                style={[s.modeCard, s.modeCardAccent]}
                 activeOpacity={0.85}
                 onPress={() => { setMode('edit'); goTo('editUpload'); }}
               >
-                <Text style={[s.modeLabel, { color: C.camText }]}>Edit Maker</Text>
-                <Text style={[s.modeDesc, { color: 'rgba(240,237,232,0.6)' }]}>Drop multiple clips and let AI cut them into one fire edit.</Text>
-                <Text style={[s.modeCta, { color: 'rgba(240,237,232,0.35)' }]}>Get started  →</Text>
+                <Text style={s.modeLabel}>Edit Maker</Text>
+                <Text style={s.modeDesc}>Drop multiple clips and let AI cut them into one fire edit.</Text>
+                <Text style={s.modeCta}>Get started  →</Text>
               </TouchableOpacity>
             </View>
           </SafeAreaView>
@@ -562,76 +561,76 @@ const s = StyleSheet.create({
   // Clip Choice
   choiceWrap:        { flex: 1, padding: 24, paddingTop: 12 },
   choiceTitle:       { fontSize: 28, fontWeight: '700', color: C.text, marginTop: 16 },
-  choiceSub:         { fontSize: 14, color: C.textMid, lineHeight: 21, marginTop: 6 },
-  choiceCenter:      { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 28 },
-  recordCircle:      { width: 140, height: 140, borderRadius: 70, backgroundColor: C.record, alignItems: 'center', justifyContent: 'center', shadowColor: C.record, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.4, shadowRadius: 18 },
+  choiceSub:         { fontSize: 14, color: C.textMid, lineHeight: 22, marginTop: 6 },
+  choiceCenter:      { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 32 },
+  recordCircle:      { width: 140, height: 140, borderRadius: 70, backgroundColor: C.record, alignItems: 'center', justifyContent: 'center', shadowColor: C.record, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.5, shadowRadius: 24 },
   recordCircleLabel: { fontSize: 17, fontWeight: '700', color: '#fff', letterSpacing: 0.5 },
   choiceOrRow:       { flexDirection: 'row', alignItems: 'center', gap: 12, width: '65%' },
   choiceOrLine:      { flex: 1, height: 1, backgroundColor: C.border },
-  choiceOrText:      { fontSize: 13, color: C.textFaint },
-  uploadChoiceBtn:   { borderWidth: 1.5, borderColor: C.border, borderRadius: 14, paddingVertical: 16, paddingHorizontal: 48, backgroundColor: C.surface },
-  uploadChoiceText:  { fontSize: 15, fontWeight: '600', color: C.textMid },
+  choiceOrText:      { fontSize: 13, color: C.textMid },
+  uploadChoiceBtn:   { borderWidth: 1, borderColor: C.border, borderRadius: 14, paddingVertical: 16, paddingHorizontal: 48, backgroundColor: C.surface },
+  uploadChoiceText:  { fontSize: 15, fontWeight: '600', color: C.text },
 
   // Home
   homePad:      { flex: 1, padding: 24, gap: 16 },
   homeHeader:   { marginBottom: 8 },
-  homeWordmark: { fontSize: 13, fontWeight: '700', color: C.text, letterSpacing: 3 },
-  homeSub:      { fontSize: 24, fontWeight: '700', color: C.text, marginTop: 8, lineHeight: 30 },
-  modeCard:     { flex: 1, borderRadius: 20, backgroundColor: C.surface, padding: 24, gap: 10, borderWidth: 1, borderColor: C.border },
-  modeCardDark: { backgroundColor: C.camBg, borderColor: 'transparent' },
+  homeWordmark: { fontSize: 12, fontWeight: '700', color: C.text, letterSpacing: 4 },
+  homeSub:      { fontSize: 26, fontWeight: '700', color: C.text, marginTop: 10, lineHeight: 32 },
+  modeCard:     { flex: 1, borderRadius: 18, backgroundColor: C.surface, padding: 24, gap: 10, borderWidth: 1, borderColor: C.border },
+  modeCardAccent: { borderColor: C.accent + '40' },
   modeLabel:    { fontSize: 20, fontWeight: '700', color: C.text },
-  modeDesc:     { fontSize: 14, color: C.textMid, lineHeight: 21 },
-  modeCta:      { fontSize: 13, color: C.textFaint, marginTop: 4 },
+  modeDesc:     { fontSize: 14, color: C.textMid, lineHeight: 22 },
+  modeCta:      { fontSize: 13, color: C.textMid, marginTop: 4 },
 
   // Style screen
-  stylePad:        { padding: 20, gap: 18, paddingBottom: 52 },
+  stylePad:        { padding: 20, gap: 20, paddingBottom: 52 },
   thumb:           { width: SW - 40, height: (SW - 40) * 0.56, borderRadius: 14, backgroundColor: C.surface },
   sectionLabel:    { fontSize: 11, fontWeight: '600', color: C.textMid, letterSpacing: 1.5, textTransform: 'uppercase' },
-  errorText:       { fontSize: 13, color: '#c05040', backgroundColor: '#f8ece8', borderRadius: 8, padding: 10 },
+  errorText:       { fontSize: 13, color: '#ff6b6b', backgroundColor: '#1e0f0f', borderRadius: 10, padding: 12 },
   styleGrid:       { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  styleCard:       { width: CARD_W, height: 120, borderRadius: 14, justifyContent: 'flex-end', padding: 14, overflow: 'hidden' },
-  styleCardActive: { borderWidth: 2, borderColor: C.camText },
+  styleCard:       { width: CARD_W, height: 112, borderRadius: 14, justifyContent: 'flex-end', padding: 14, overflow: 'hidden' },
+  styleCardActive: { borderWidth: 2, borderColor: '#ffffff' },
   styleCardCheck:  { position: 'absolute', top: 10, right: 12, color: '#fff', fontSize: 14, fontWeight: '700' },
   styleCardLabel:  { fontSize: 14, fontWeight: '600', color: '#fff' },
-  input:           { borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 13, fontSize: 14, color: C.text, backgroundColor: C.surface },
-  primaryBtn:      { backgroundColor: C.text, borderRadius: 12, paddingVertical: 15, alignItems: 'center' },
-  primaryBtnText:  { color: C.elevated, fontWeight: '600', fontSize: 16 },
-  ghost:           { fontSize: 14, color: C.textFaint, textAlign: 'center' },
-  outlineBtn:      { borderWidth: 1, borderColor: C.border, borderRadius: 12, paddingVertical: 14, alignItems: 'center', backgroundColor: C.surface },
-  outlineBtnText:  { fontSize: 15, color: C.textMid },
-  backLink:        { fontSize: 14, color: C.textFaint, fontWeight: '500' },
+  input:           { borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 14, fontSize: 14, color: C.text, backgroundColor: C.surface },
+  primaryBtn:      { backgroundColor: C.text, borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
+  primaryBtnText:  { color: '#080808', fontWeight: '700', fontSize: 16 },
+  ghost:           { fontSize: 14, color: C.textMid, textAlign: 'center' },
+  outlineBtn:      { borderWidth: 1, borderColor: C.border, borderRadius: 14, paddingVertical: 15, alignItems: 'center', backgroundColor: C.surface },
+  outlineBtnText:  { fontSize: 15, color: C.text },
+  backLink:        { fontSize: 14, color: C.textMid, fontWeight: '500' },
 
   // Edit upload
   rowHeader:      { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  emptyClips:     { height: 160, borderRadius: 14, borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: C.surface },
+  emptyClips:     { height: 160, borderRadius: 14, borderWidth: 1, borderColor: C.border, borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: C.surface },
   emptyClipsTitle:{ fontSize: 16, fontWeight: '600', color: C.textMid },
   clipGrid:       { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   clipItem:       { width: CLIP_W, height: CLIP_W * 0.75, borderRadius: 10, position: 'relative' },
   clipThumb:      { width: '100%', height: '100%', borderRadius: 10, backgroundColor: C.surface },
-  clipRemoveBtn:  { position: 'absolute', top: -8, right: -8, width: 22, height: 22, borderRadius: 11, backgroundColor: C.text, alignItems: 'center', justifyContent: 'center', zIndex: 10 },
-  clipRemoveText: { fontSize: 10, color: C.elevated, fontWeight: '700' },
-  clipNumBadge:   { position: 'absolute', bottom: 6, left: 8, backgroundColor: 'rgba(30,27,24,0.6)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
-  clipNumText:    { fontSize: 11, color: C.camText, fontWeight: '600' },
+  clipRemoveBtn:  { position: 'absolute', top: -8, right: -8, width: 22, height: 22, borderRadius: 11, backgroundColor: C.elevated, borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', zIndex: 10 },
+  clipRemoveText: { fontSize: 10, color: C.text, fontWeight: '700' },
+  clipNumBadge:   { position: 'absolute', bottom: 6, left: 8, backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  clipNumText:    { fontSize: 11, color: C.text, fontWeight: '600' },
 
   // Processing modal
-  backdrop:     { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(30,27,24,0.45)' },
-  modalSheet:   { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: C.elevated, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 28, paddingTop: 14, paddingBottom: 52, shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.1, shadowRadius: 16, elevation: 20 },
-  modalHandle:  { width: 36, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: 'center', marginBottom: 24 },
+  backdrop:     { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.65)' },
+  modalSheet:   { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: C.elevated, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 28, paddingTop: 14, paddingBottom: 52, shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.4, shadowRadius: 20, elevation: 20 },
+  modalHandle:  { width: 36, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: 'center', marginBottom: 28 },
   modalTitle:   { fontSize: 22, fontWeight: '700', color: C.text, letterSpacing: -0.3 },
-  modalStyle:   { fontSize: 12, color: C.textMid, letterSpacing: 2, marginTop: 3 },
-  progressMsg:  { fontSize: 14, color: C.textMid, marginTop: 24, marginBottom: 14 },
-  progressTrack:{ height: 4, backgroundColor: C.border, borderRadius: 2, overflow: 'hidden' },
-  progressFill: { height: '100%', backgroundColor: C.text, borderRadius: 2 },
+  modalStyle:   { fontSize: 11, color: C.accent, letterSpacing: 2.5, marginTop: 4 },
+  progressMsg:  { fontSize: 13, color: C.textMid, marginTop: 24, marginBottom: 14, fontFamily: undefined },
+  progressTrack:{ height: 2, backgroundColor: C.border, borderRadius: 1, overflow: 'hidden' },
+  progressFill: { height: '100%', backgroundColor: C.accent, borderRadius: 1 },
 
   // Result
-  resultPad:     { padding: 16, gap: 14, paddingBottom: 52 },
-  tabBar:        { flexDirection: 'row', backgroundColor: C.surface, borderRadius: 12, padding: 3, position: 'relative', height: 44 },
-  tabIndicator:  { position: 'absolute', top: 3, bottom: 3, backgroundColor: C.elevated, borderRadius: 9, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 3 },
+  resultPad:     { padding: 16, gap: 16, paddingBottom: 52 },
+  tabBar:        { flexDirection: 'row', backgroundColor: C.surface, borderRadius: 14, padding: 3, position: 'relative', height: 46 },
+  tabIndicator:  { position: 'absolute', top: 3, bottom: 3, backgroundColor: C.elevated, borderRadius: 11, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.3, shadowRadius: 4 },
   tabBtn:        { flex: 1, alignItems: 'center', justifyContent: 'center', zIndex: 1 },
-  tabText:       { fontSize: 13, fontWeight: '600', color: C.textFaint },
+  tabText:       { fontSize: 13, fontWeight: '600', color: C.textMid },
   tabTextActive: { color: C.text },
-  video:         { width: '100%', height: 300, borderRadius: 14, backgroundColor: C.text },
-  narrationCard: { backgroundColor: C.surface, borderRadius: 12, padding: 18, borderWidth: 1, borderColor: C.border },
-  narrationLabel:{ fontSize: 10, fontWeight: '700', color: C.textFaint, marginBottom: 10, letterSpacing: 1.5 },
-  narrationBody: { fontSize: 15, lineHeight: 25, color: C.textMid },
+  video:         { width: '100%', height: 300, borderRadius: 14, backgroundColor: C.surface },
+  narrationCard: { backgroundColor: C.surface, borderRadius: 14, padding: 18, borderWidth: 1, borderColor: C.border },
+  narrationLabel:{ fontSize: 10, fontWeight: '700', color: C.textMid, marginBottom: 10, letterSpacing: 1.5 },
+  narrationBody: { fontSize: 15, lineHeight: 26, color: C.textMid },
 });
