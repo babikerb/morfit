@@ -372,37 +372,48 @@ function findYtdlp() {
   return null;
 }
 
-// Lyria 2 via Vertex AI.
-// Requires: npm install google-auth-library  +  GOOGLE_CLOUD_PROJECT in .env
-// + gcloud auth application-default login (or service account key)
-async function generateLyriaMusic(prompt, durationSecs) {
-  const projectId = process.env.GOOGLE_CLOUD_PROJECT;
-  if (!projectId) throw new Error('GOOGLE_CLOUD_PROJECT not set');
-  // google-auth-library is not installed by default — add it first
-  const { GoogleAuth } = require('google-auth-library');
-  const auth  = new GoogleAuth({ scopes: 'https://www.googleapis.com/auth/cloud-platform' });
-  const token = await auth.getAccessToken();
-  const res = await fetch(
-    `https://us-central1-aiplatform.googleapis.com/v1/projects/${projectId}/locations/us-central1/publishers/google/models/lyria-002:predict`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({
-        instances:  [{ prompt, durationSeconds: Math.min(30, Math.ceil(durationSecs)) }],
-        parameters: { sampleCount: 1 },
-      }),
-    }
-  );
+// Jamendo: free royalty-free music API — no API key needed for basic use.
+// Optional: set JAMENDO_CLIENT_ID in .env (register free at developer.jamendo.com)
+async function fetchJamendoTrack(vibe, ts) {
+  const clientId = process.env.JAMENDO_CLIENT_ID || 'b6747d04';
+  const v = (vibe || '').toLowerCase();
+
+  let tags;
+  if (v.match(/hype|fire|energy|fast|lit|hard/))    tags = 'hiphop+electronic';
+  else if (v.match(/chill|soft|calm|lo.?fi|dream/)) tags = 'chillout+ambient';
+  else if (v.match(/cinematic|epic|film|dark/))      tags = 'orchestral+cinematic';
+  else if (v.match(/retro|vhs|vintage|80s/))         tags = 'electronic+retro';
+  else                                                tags = 'electronic+pop';
+
+  const url =
+    `https://api.jamendo.com/v3.0/tracks/?client_id=${clientId}` +
+    `&format=json&limit=10&tags=${tags}&audioformat=mp32` +
+    `&include=musicinfo&boost=popularity_total&audiodownload_allowed=true`;
+
+  const res  = await fetch(url, { headers: { 'User-Agent': 'Morfit/1.0' } });
   const data = await res.json();
-  if (!data.predictions?.[0]?.bytesBase64Encoded) throw new Error('Lyria no audio: ' + JSON.stringify(data).slice(0, 200));
-  return Buffer.from(data.predictions[0].bytesBase64Encoded, 'base64');
+
+  if (!data.results?.length) throw new Error(`Jamendo: no tracks for tags "${tags}"`);
+
+  // Pick a random track from results for variety
+  const track    = data.results[Math.floor(Math.random() * data.results.length)];
+  const audioUrl = track.audiodownload || track.audio;
+  if (!audioUrl) throw new Error('Jamendo: no download URL on track');
+
+  const audioRes = await fetch(audioUrl, { headers: { 'User-Agent': 'Morfit/1.0' } });
+  if (!audioRes.ok) throw new Error(`Jamendo download failed: ${audioRes.status}`);
+
+  const out = path.join(__dirname, 'uploads', `music_${ts}.mp3`);
+  fs.writeFileSync(out, Buffer.from(await audioRes.arrayBuffer()));
+  console.log(`Music: Jamendo "${track.name}" by ${track.artist_name} [${tags}]`);
+  return out;
 }
 
 // Returns path to a music file, or null if nothing found.
-async function findMusic(vibe, totalDur, ts) {
-  // 1. yt-dlp — specific artist/song from vibe string
-  const query  = parseArtistSong(vibe);
-  const ytdlp  = findYtdlp();
+async function findMusic(vibe, ts) {
+  // 1. yt-dlp — specific artist/song named in vibe field
+  const query = parseArtistSong(vibe);
+  const ytdlp = findYtdlp();
   if (query && ytdlp) {
     const out = path.join(__dirname, 'uploads', `music_${ts}.mp3`);
     try {
@@ -412,11 +423,9 @@ async function findMusic(vibe, totalDur, ts) {
       );
       if (fs.existsSync(out)) { console.log(`Music: yt-dlp "${query}"`); return out; }
     } catch (err) { console.warn('yt-dlp failed:', err.message); }
-  } else if (query) {
-    console.log('Music: yt-dlp not found — install with: brew install yt-dlp');
   }
 
-  // 2. Pre-bundled tracks in backend/music/
+  // 2. Pre-bundled tracks in backend/music/ (optional override)
   const musicDir = path.join(__dirname, 'music');
   if (fs.existsSync(musicDir)) {
     const vibeKey = (vibe || '').toLowerCase();
@@ -429,19 +438,14 @@ async function findMusic(vibe, totalDur, ts) {
     if (fs.existsSync(def)) { console.log('Music: bundled default.mp3'); return def; }
   }
 
-  // 3. Lyria 2 via Vertex AI (needs google-auth-library + GOOGLE_CLOUD_PROJECT)
-  if (process.env.GOOGLE_CLOUD_PROJECT) {
-    try {
-      const prompt = `Instrumental background music for a video edit. Vibe: ${vibe || 'energetic, cinematic'}. No vocals.`;
-      const buf = await generateLyriaMusic(prompt, totalDur);
-      const out = path.join(__dirname, 'uploads', `music_${ts}.mp3`);
-      fs.writeFileSync(out, buf);
-      console.log('Music: generated via Lyria');
-      return out;
-    } catch (err) { console.warn('Lyria failed:', err.message); }
+  // 3. Jamendo — free royalty-free music, no setup required
+  try {
+    return await fetchJamendoTrack(vibe, ts);
+  } catch (err) {
+    console.warn('Music: Jamendo failed —', err.message);
   }
 
-  console.log('Music: none found, edit will be silent');
+  console.log('Music: all sources failed, edit will be silent');
   return null;
 }
 
@@ -559,8 +563,7 @@ async function runEditPipeline(jobId, videoPaths, vibe, ts) {
 
   // Step 2: Find music (yt-dlp → bundled files → Lyria → silent)
   setStep(jobId, 2);
-  const totalRawDur = trims.reduce((s, t) => s + t.duration, 0);
-  const musicFile   = await findMusic(vibe, totalRawDur, ts);
+  const musicFile = await findMusic(vibe, ts);
 
   // Step 3: Stitch with color grade + varied transitions + fade in/out + music
   setStep(jobId, 3);
