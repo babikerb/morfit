@@ -305,13 +305,37 @@ async function runPipeline(jobId, videoPath, style, ts) {
 
 // ── Edit pipeline: ffmpeg stitch ──────────────────────────────────────────────
 
-function pickTransition(vibe) {
+// One transition per cut — picks from a vibe-matched pool, cycling through variety
+function getTransitions(count, vibe) {
   const v = (vibe || '').toLowerCase();
-  if (v.match(/glitch|hack|cyber|tech/))          return 'pixelize';
-  if (v.match(/fast|hype|fire|energy|lit|hard/))  return 'wipeleft';
-  if (v.match(/dream|chill|slow|soft|calm|lo.?fi/)) return 'dissolve';
-  if (v.match(/retro|vhs|vintage|80s/))           return 'fadeblack';
-  return 'fade';
+  let pool;
+  if (v.match(/glitch|hack|cyber|tech/))            pool = ['pixelize', 'fadeblack', 'wipeleft'];
+  else if (v.match(/fast|hype|fire|energy|lit/))    pool = ['wipeleft', 'wiperight', 'slideleft', 'slideright'];
+  else if (v.match(/dream|chill|soft|calm|lo.?fi/)) pool = ['dissolve', 'fade', 'fadegrays'];
+  else if (v.match(/retro|vhs|vintage|80s/))        pool = ['fadeblack', 'pixelize', 'fade'];
+  else                                               pool = ['fade', 'dissolve', 'wipeleft', 'fadeblack'];
+  return Array.from({ length: count }, (_, i) => pool[i % pool.length]);
+}
+
+// Color grade filter string based on vibe
+function getColorGrade(vibe) {
+  const v = (vibe || '').toLowerCase();
+  if (v.match(/hype|fire|energy|fast|lit|hard/))
+    return 'eq=saturation=1.4:contrast=1.15,vignette';
+  if (v.match(/chill|soft|calm|lo.?fi|dream/))
+    return 'eq=saturation=0.85:brightness=0.04:contrast=0.95,vignette=angle=PI/4';
+  if (v.match(/retro|vhs|vintage|80s/))
+    return 'eq=saturation=1.3:contrast=1.1:gamma_r=1.1:gamma_b=0.9,vignette';
+  if (v.match(/cinematic|epic|film|dark|moody/))
+    return 'eq=contrast=1.1:saturation=0.9,vignette';
+  return 'eq=contrast=1.05:saturation=1.1';
+}
+
+// Decide how much of a clip to keep — skip shaky opening, cap at maxDur
+function computeTrim(info, maxDur = 8) {
+  if (info.duration <= maxDur) return { start: 0, duration: info.duration };
+  const start = Math.min(1.5, info.duration * 0.1); // skip first ~10% (setup/shake)
+  return { start, duration: maxDur };
 }
 
 // ── Music selection ───────────────────────────────────────────────────────────
@@ -408,85 +432,88 @@ async function findMusic(vibe, totalDur, ts) {
   return null;
 }
 
-// ── Stitch (video only from clips — music overlaid separately) ────────────────
+// ── Stitch: clip audio stripped, color grade + varied transitions + fade in/out + music ──
 
-function stitchClips(videoPaths, infos, vibe, musicFile, outputPath) {
+// trims = [{start, duration}, ...] one per clip
+function stitchClips(videoPaths, trims, infos, vibe, musicFile, outputPath) {
   return new Promise((resolve, reject) => {
-    const T          = 0.5;
-    const transition = pickTransition(vibe);
-    const N          = videoPaths.length;
-    const totalDur   = infos.reduce((s, i) => s + i.duration, 0) - (N - 1) * T;
+    const T           = 0.5;
+    const N           = videoPaths.length;
+    const transitions = getTransitions(N - 1, vibe);
+    const colorGrade  = getColorGrade(vibe);
+    const trimDurs    = trims.map(t => t.duration);
+    const totalDur    = trimDurs.reduce((s, d) => s + d, 0) - Math.max(0, N - 1) * T;
 
-    // Even-number target dims from first clip
     const targetW = infos[0].width  % 2 === 0 ? infos[0].width  : infos[0].width  - 1;
     const targetH = infos[0].height % 2 === 0 ? infos[0].height : infos[0].height - 1;
 
+    // Build command: each clip input with seek+duration for trimming
     let cmd = ffmpeg();
-    videoPaths.forEach(p => cmd = cmd.input(p));
+    videoPaths.forEach((p, i) => {
+      cmd = cmd.input(p).inputOptions([`-ss ${trims[i].start}`, `-t ${trims[i].duration}`]);
+    });
     if (musicFile) cmd = cmd.input(musicFile);
     const musicIdx = N;
 
+    const filters   = [];
+    const fadeInDur = 0.4;
+    const fadeOutSt = Math.max(0, totalDur - fadeInDur).toFixed(3);
+
     if (N === 1) {
-      const opts = ['-c:v libx264', '-crf 22', '-preset fast', '-movflags +faststart', '-an'];
+      // Single clip: grade + fade in/out + optional music
+      filters.push(
+        `[0:v]setpts=PTS-STARTPTS,` +
+        `scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,` +
+        `pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2,fps=30,setsar=1,${colorGrade},` +
+        `fade=t=in:st=0:d=${fadeInDur},fade=t=out:st=${fadeOutSt}:d=${fadeInDur}[vout]`
+      );
       if (musicFile) {
-        // Single clip + music
-        cmd
-          .complexFilter([
-            `[0:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2,fps=30,setsar=1[vout]`,
-            `[${musicIdx}:a]aloop=loop=-1:size=2e+09,volume=0.5,atrim=0:${totalDur.toFixed(3)}[aout]`,
-          ])
-          .outputOptions(['-map [vout]', '-map [aout]', '-c:v libx264', '-crf 22', '-preset fast', '-c:a aac', '-ar 44100', '-movflags +faststart'])
-          .output(outputPath)
-          .on('end', resolve)
-          .on('error', reject)
-          .run();
-      } else {
-        ffmpeg(videoPaths[0])
-          .outputOptions(['-c:v libx264', '-crf 22', '-preset fast', '-movflags +faststart', '-an'])
-          .output(outputPath)
-          .on('end', resolve)
-          .on('error', reject)
-          .run();
+        filters.push(`[${musicIdx}:a]aloop=loop=-1:size=2e+09,volume=0.5,atrim=0:${totalDur.toFixed(3)},asetpts=PTS-STARTPTS[aout]`);
       }
+      const mapOpts = ['-map [vout]'];
+      const encOpts = ['-c:v libx264', '-crf 22', '-preset fast', '-movflags +faststart'];
+      if (musicFile) { mapOpts.push('-map [aout]'); encOpts.push('-c:a aac', '-ar 44100'); }
+      cmd.complexFilter(filters).outputOptions([...mapOpts, ...encOpts])
+        .output(outputPath).on('end', resolve).on('error', reject).run();
       return;
     }
 
-    const filters = [];
-
-    // Normalize each clip — video only (strip original audio)
+    // Normalize each clip: reset timestamps + scale + color grade
     for (let i = 0; i < N; i++) {
       filters.push(
-        `[${i}:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,` +
-        `pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2,fps=30,setsar=1[nv${i}]`
+        `[${i}:v]setpts=PTS-STARTPTS,` +
+        `scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,` +
+        `pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2,fps=30,setsar=1,${colorGrade}[nv${i}]`
       );
     }
 
-    // xfade chain
+    // xfade chain — different transition per cut
     let prevV = 'nv0', sumDur = 0;
     for (let i = 1; i < N; i++) {
-      sumDur += infos[i - 1].duration;
+      sumDur += trimDurs[i - 1];
       const offset = Math.max(0.1, sumDur - i * T).toFixed(3);
-      const out = i === N - 1 ? 'vout' : `xv${i}`;
-      filters.push(`[${prevV}][nv${i}]xfade=transition=${transition}:duration=${T}:offset=${offset}[${out}]`);
+      const tr  = transitions[i - 1];
+      const out = i === N - 1 ? 'vxfade' : `xv${i}`;
+      filters.push(`[${prevV}][nv${i}]xfade=transition=${tr}:duration=${T}:offset=${offset}[${out}]`);
       prevV = out;
     }
+
+    // Fade in at start + fade out at end on the assembled video
+    filters.push(
+      `[vxfade]fade=t=in:st=0:d=${fadeInDur},fade=t=out:st=${fadeOutSt}:d=${fadeInDur}[vout]`
+    );
 
     const mapOpts = ['-map [vout]'];
     const encOpts = ['-c:v libx264', '-crf 22', '-preset fast', '-movflags +faststart'];
 
     if (musicFile) {
-      filters.push(`[${musicIdx}:a]aloop=loop=-1:size=2e+09,volume=0.5,atrim=0:${totalDur.toFixed(3)}[aout]`);
+      filters.push(`[${musicIdx}:a]aloop=loop=-1:size=2e+09,volume=0.5,atrim=0:${totalDur.toFixed(3)},asetpts=PTS-STARTPTS[aout]`);
       mapOpts.push('-map [aout]');
       encOpts.push('-c:a aac', '-ar 44100');
     }
 
-    cmd
-      .complexFilter(filters)
-      .outputOptions([...mapOpts, ...encOpts])
-      .output(outputPath)
-      .on('end', resolve)
-      .on('error', reject)
-      .run();
+    cmd.complexFilter(filters).outputOptions([...mapOpts, ...encOpts])
+      .output(outputPath).on('end', resolve).on('error', reject).run();
   });
 }
 
@@ -507,34 +534,35 @@ async function runEditPipeline(jobId, videoPaths, vibe, ts) {
         return res.response.text().trim();
       })().catch(() => `${videoPaths.length} clips${vibe ? ` — ${vibe}` : ''}`),
     ]);
-    console.log(`Edit: ${videoPaths.length} clips ready`);
+    console.log(`Edit: ${videoPaths.length} clips ready, computing trims`);
   } catch (err) {
     setStep(jobId, -1, { error: 'Could not read clips: ' + err.message });
     return;
   }
 
+  // Compute trim ranges: skip shaky openings, cap long clips at 8s
+  const trims = infos.map(info => computeTrim(info, 8));
+  trims.forEach((t, i) => console.log(`  Clip ${i + 1}: ${infos[i].duration.toFixed(1)}s → keep ${t.start.toFixed(1)}s–${(t.start + t.duration).toFixed(1)}s`));
+
   // Step 2: Find music (yt-dlp → bundled files → Lyria → silent)
   setStep(jobId, 2);
-  const totalDur  = infos.reduce((s, i) => s + i.duration, 0);
-  const musicFile = await findMusic(vibe, totalDur, ts);
+  const totalRawDur = trims.reduce((s, t) => s + t.duration, 0);
+  const musicFile   = await findMusic(vibe, totalRawDur, ts);
 
-  // Step 3: Stitch clips with ffmpeg (clip audio stripped, music overlaid)
+  // Step 3: Stitch with color grade + varied transitions + fade in/out + music
   setStep(jobId, 3);
-  let tempMusicFile = musicFile; // track for cleanup
   try {
-    await stitchClips(videoPaths, infos, vibe, musicFile, outputPath);
-    console.log('Edit: stitched video saved:', outputPath);
+    await stitchClips(videoPaths, trims, infos, vibe, musicFile, outputPath);
+    console.log('Edit: done', outputPath);
   } catch (err) {
     console.error('Stitch error:', err.message);
     setStep(jobId, -1, { error: 'Stitch failed: ' + err.message });
     return;
   }
 
-  // Cleanup uploads + any temp music download
+  // Cleanup
   videoPaths.forEach(p => { try { fs.unlinkSync(p); } catch {} });
-  if (tempMusicFile && tempMusicFile.includes('uploads')) {
-    try { fs.unlinkSync(tempMusicFile); } catch {}
-  }
+  if (musicFile && musicFile.includes('uploads')) { try { fs.unlinkSync(musicFile); } catch {} }
 
   setStep(jobId, 4, {
     result: {
