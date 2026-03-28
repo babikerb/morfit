@@ -56,8 +56,12 @@ npx expo run:ios --device
 - [ ] Better loading UX: step-by-step progress ("Analyzing...", "Styling frame...", "Generating video...") instead of a single status string
 - [ ] Handle videos longer than 8s — either warn user or trim before sending
 - [ ] Show original video preview before/after transformation
-- [ ] Error recovery: if Veo fails, offer to retry or fallback to showing the Imagen styled frame
+- [ ] Error recovery: if Veo fails, show an error msg
 - [ ] Clean up old outputs on the backend (disk fills up over time)
-- [ ] Deploy backend somewhere persistent (Railway, Fly.io) so ngrok isn't needed
 - [ ] Add more styles or let user describe a full scene transformation
 - [ ] Sound/audio: Veo 3 supports audio generation — explore enabling it
+- [ ] Add whole new feature upload alot of clips and be like make me a fire edit as a cool feature (not using filter or another feature)
+- [ ] make ui a hybrid of dark and light theme
+- [ ] add library feature that allows ppl to see videos uploaded along with outputs that are binded to the videos that were uploaded
+- [ ] think about ways to add another track to the edit functionality - tracks are nanobanana, lyra and veo (i cant use veo to edit)
+- [ ] make it get rid of the audio in all the clips so that it could put music ontop aybe use google music to search for music (if they name a specific artist then put it or a specific song)
