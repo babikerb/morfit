@@ -66,11 +66,12 @@ export default function App() {
   const [styleError, setStyleError]     = useState('');
 
   // Library
-  const [libraryItems, setLibraryItems]     = useState({ generated: [], edits: [] });
-  const [libraryTab, setLibraryTab]         = useState('generated');
-  const [libraryLoading, setLibraryLoading] = useState(false);
-  const [selectedItem, setSelectedItem]     = useState(null);
-  const [saveMsg, setSaveMsg]               = useState('');
+  const [libraryItems, setLibraryItems]         = useState({ generated: [], edits: [] });
+  const [libraryTab, setLibraryTab]             = useState('generated');
+  const [libraryLoading, setLibraryLoading]     = useState(false);
+  const [selectedItem, setSelectedItem]         = useState(null);
+  const [showLibOriginal, setShowLibOriginal]   = useState(false);
+  const [saveMsg, setSaveMsg]                   = useState('');
 
   const pollingRef = useRef(false);
 
@@ -78,12 +79,14 @@ export default function App() {
   const backdropAnim = useRef(new Animated.Value(0)).current;
   const modalAnim    = useRef(new Animated.Value(400)).current;
   const tabAnim      = useRef(new Animated.Value(0)).current;
+  const libTabAnim   = useRef(new Animated.Value(0)).current;
   const progressAnim = useRef(new Animated.Value(0)).current;
 
   const previewPlayer     = useVideoPlayer(capturedUri, p => { p.loop = true; p.volume = 0; });
   const originalPlayer    = useVideoPlayer(result?.originalUri ?? null, p => { p.loop = true; });
   const transformedPlayer = useVideoPlayer(result?.videoUrl    ?? null, p => { p.loop = true; });
   const libraryPlayer     = useVideoPlayer(selectedItem?.url   ?? null, p => { p.loop = true; });
+  const libOriginalPlayer = useVideoPlayer(selectedItem?.originalUrl ? `${BACKEND_URL}${selectedItem.originalUrl}` : null, p => { p.loop = true; });
 
   useEffect(() => {
     if (screen === 'style' && capturedUri) previewPlayer.play();
@@ -97,9 +100,10 @@ export default function App() {
   }, [screen, showOriginal]);
 
   useEffect(() => {
-    if (screen === 'libraryPlayer' && selectedItem) libraryPlayer.play();
-    else libraryPlayer.pause?.();
-  }, [screen, selectedItem]);
+    if (screen !== 'libraryPlayer') { libraryPlayer.pause?.(); libOriginalPlayer.pause?.(); return; }
+    if (showLibOriginal) { libOriginalPlayer.play(); libraryPlayer.pause?.(); }
+    else                 { libraryPlayer.play(); libOriginalPlayer.pause?.(); }
+  }, [screen, selectedItem, showLibOriginal]);
 
   // ── Navigation ─────────────────────────────────────────────────────────────
 
@@ -324,8 +328,15 @@ export default function App() {
   }
 
   function openLibraryItem(item) {
-    setSelectedItem(item);
+    setSelectedItem({ ...item, url: `${BACKEND_URL}${item.url}` });
+    setShowLibOriginal(false);
+    libTabAnim.setValue(0);
     goTo('libraryPlayer');
+  }
+
+  function switchLibTab(toOriginal) {
+    setShowLibOriginal(toOriginal);
+    Animated.spring(libTabAnim, { toValue: toOriginal ? 1 : 0, tension: 80, friction: 10, useNativeDriver: false }).start();
   }
 
   // ── Reset ───────────────────────────────────────────────────────────────────
@@ -350,7 +361,8 @@ export default function App() {
     ? STATUS_MSGS[0]
     : STATUS_MSGS[Math.min(backendStep, STATUS_MSGS.length - 1)];
 
-  const activeLibItems = libraryTab === 'generated' ? libraryItems.generated : libraryItems.edits;
+  const activeLibItems    = libraryTab === 'generated' ? libraryItems.generated : libraryItems.edits;
+  const libTabIndicatorX  = libTabAnim.interpolate({ inputRange: [0, 1], outputRange: [3, TAB_W + 3] });
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -650,7 +662,7 @@ export default function App() {
                       <TouchableOpacity
                         key={item.id}
                         style={s.libCard}
-                        onPress={() => openLibraryItem({ ...item, url: `${BACKEND_URL}${item.url}` })}
+                        onPress={() => openLibraryItem(item)}
                         activeOpacity={0.8}
                       >
                         <View style={s.libCardThumb}>
@@ -698,11 +710,34 @@ export default function App() {
                 <View style={s.libPlayerBack} />
               </View>
 
-              <VideoView player={libraryPlayer} style={s.video} allowsFullscreen allowsPictureInPicture />
+              {selectedItem?.originalUrl ? (
+                <View style={s.tabBar}>
+                  <Animated.View style={[s.tabIndicator, { width: TAB_W, transform: [{ translateX: libTabIndicatorX }] }]} />
+                  <TouchableOpacity style={s.tabBtn} onPress={() => switchLibTab(false)}>
+                    <Text style={[s.tabText, !showLibOriginal && s.tabTextActive]}>
+                      {selectedItem?.type === 'generated' ? 'Generated' : 'Edit'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={s.tabBtn} onPress={() => switchLibTab(true)}>
+                    <Text style={[s.tabText, showLibOriginal && s.tabTextActive]}>Original</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {showLibOriginal
+                ? <VideoView player={libOriginalPlayer} style={s.video} allowsFullscreen allowsPictureInPicture />
+                : <VideoView player={libraryPlayer}     style={s.video} allowsFullscreen allowsPictureInPicture />
+              }
 
               {saveMsg ? <View style={s.saveMsgBanner}><Text style={s.saveMsgText}>{saveMsg}</Text></View> : null}
 
-              <TouchableOpacity style={s.primaryBtn} onPress={() => saveVideo(selectedItem?.url)}>
+              <TouchableOpacity
+                style={s.primaryBtn}
+                onPress={() => saveVideo(showLibOriginal
+                  ? `${BACKEND_URL}${selectedItem?.originalUrl}`
+                  : selectedItem?.url
+                )}
+              >
                 <Text style={s.primaryBtnText}>Save to Camera Roll</Text>
               </TouchableOpacity>
             </View>

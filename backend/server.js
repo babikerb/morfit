@@ -21,6 +21,7 @@ const fileManager = new GoogleAIFileManager(GEMINI_KEY);
 app.use(cors());
 app.use(express.json());
 app.use('/outputs', express.static(path.join(__dirname, 'outputs')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true });
 fs.mkdirSync(path.join(__dirname, 'outputs'), { recursive: true });
@@ -264,11 +265,11 @@ function extractThumbnail(videoPath, thumbPath) {
   });
 }
 
-function writeMeta(ts, prefix, name, thumbnailUrl) {
+function writeMeta(ts, prefix, meta) {
   try {
     fs.writeFileSync(
       path.join(__dirname, 'outputs', `meta_${prefix}${ts}.json`),
-      JSON.stringify({ name, thumbnailUrl })
+      JSON.stringify(meta)
     );
   } catch {}
 }
@@ -316,12 +317,13 @@ async function runPipeline(jobId, videoPath, style, ts) {
     return;
   }
 
-  // Thumbnail + smart name
-  const thumbPath    = path.join(__dirname, 'outputs', `thumb_${ts}.jpg`);
-  const thumbUrl     = `/outputs/thumb_${ts}.jpg`;
+  // Thumbnail + smart name + original URL
+  const thumbPath   = path.join(__dirname, 'outputs', `thumb_${ts}.jpg`);
+  const thumbUrl    = `/outputs/thumb_${ts}.jpg`;
+  const originalUrl = `/uploads/${path.basename(videoPath)}`;
   try { fs.copyFileSync(framePaths[0], thumbPath); } catch {}
   const clipName = makeClipName(style, narration);
-  writeMeta(ts, '', clipName, thumbUrl);
+  writeMeta(ts, '', { name: clipName, thumbnailUrl: thumbUrl, originalUrl });
 
   // Step 2: Style frame
   setStep(jobId, 2);
@@ -360,6 +362,7 @@ async function runPipeline(jobId, videoPath, style, ts) {
       transformedVideoUrl: `/outputs/transformed_${ts}.mp4`,
       name: clipName,
       thumbnailUrl: thumbUrl,
+      originalUrl,
     },
   });
 }
@@ -649,7 +652,7 @@ async function runEditPipeline(jobId, videoPaths, vibe, ts) {
   const editThumbUrl  = `/outputs/thumb_edit_${ts}.jpg`;
   await extractThumbnail(videoPaths[0], editThumbPath);
   const editName = makeEditName(vibe);
-  writeMeta(ts, 'edit_', editName, editThumbUrl);
+  writeMeta(ts, 'edit_', { name: editName, thumbnailUrl: editThumbUrl, originalUrl: null });
 
   // Step 2: Find music (yt-dlp mainstream/user-pick → bundled files → Jamendo)
   setStep(jobId, 2);
@@ -748,6 +751,7 @@ app.get('/library', (_req, res) => {
         createdAt: parseInt(ts) || 0,
         name: meta.name || null,
         thumbnailUrl: meta.thumbnailUrl || null,
+        originalUrl: meta.originalUrl || null,
       };
     })
     .sort((a, b) => b.createdAt - a.createdAt);
@@ -762,6 +766,7 @@ app.get('/library', (_req, res) => {
         createdAt: parseInt(ts) || 0,
         name: meta.name || null,
         thumbnailUrl: meta.thumbnailUrl || null,
+        originalUrl: null,
       };
     })
     .sort((a, b) => b.createdAt - a.createdAt);
