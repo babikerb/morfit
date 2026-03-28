@@ -1,13 +1,24 @@
-import { useState, useRef, useEffect } from 'react';
-import {
-  Text, View, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, Image, Dimensions, SafeAreaView, Animated, Keyboard, ActivityIndicator, PanResponder,
-} from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
-import { useVideoPlayer, VideoView } from 'expo-video';
-import { StatusBar } from 'expo-status-bar';
-import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library';
+import { StatusBar } from 'expo-status-bar';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Animated,
+  Dimensions,
+  Image,
+  Keyboard,
+  PanResponder,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 
 const BACKEND_URL = 'https://nippily-goosepimply-lilah.ngrok-free.dev';
 const { width: SW } = Dimensions.get('window');
@@ -428,9 +439,9 @@ export default function App() {
                 activeOpacity={0.85}
                 onPress={() => { setMode('clip'); goTo('clipChoice'); }}
               >
-                <View style={s.modeCardAccentBar} />
+                <View style={[ { backgroundColor: C.textFaint }]} />
                 <Text style={s.modeLabel}>Clip Morfer</Text>
-                <Text style={s.modeDesc}>Record or upload a video and transform it into a fully AI-generated styled clip.</Text>
+                <Text style={s.modeDesc}>Record or upload a video and transform it into a fully AI-generated styled clip. Define your style and let the AI do the rest.</Text>
                 <Text style={s.modeCta}>Get started  →</Text>
               </TouchableOpacity>
 
@@ -439,9 +450,9 @@ export default function App() {
                 activeOpacity={0.85}
                 onPress={() => { setMode('edit'); goTo('editUpload'); }}
               >
-                <View style={[s.modeCardAccentBar, { backgroundColor: C.textFaint }]} />
+                <View style={[ { backgroundColor: C.textFaint }]} />
                 <Text style={s.modeLabel}>Edit Maker</Text>
-                <Text style={s.modeDesc}>Drop multiple clips and let AI cut them into one fire edit.</Text>
+                <Text style={s.modeDesc}>Drop multiple clips and let AI make an edit.</Text>
                 <Text style={s.modeCta}>Get started  →</Text>
               </TouchableOpacity>
             </View>
