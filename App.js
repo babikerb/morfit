@@ -7,7 +7,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { StatusBar } from 'expo-status-bar';
 import * as MediaLibrary from 'expo-media-library';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 
 const BACKEND_URL = 'https://nippily-goosepimply-lilah.ngrok-free.dev';
 const { width: SW } = Dimensions.get('window');

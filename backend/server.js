@@ -233,11 +233,16 @@ async function generateVeoVideo(styledFrameB64, motionPrompt, aspectRatio) {
 // ── Naming + Metadata helpers ─────────────────────────────────────────────────
 
 function makeClipName(style, narration) {
-  // First clause of narration (up to first punctuation), capped at 50 chars, prefixed with style
-  const clause = (narration || '').split(/[.,!?]/)[0].trim();
-  const body   = clause.length > 48 ? clause.slice(0, 47) + '…' : clause;
-  const label  = style.charAt(0).toUpperCase() + style.slice(1);
-  return body ? `${label}: ${body}` : label;
+  // Pick 3 meaningful words from the narration (skip articles/prepositions), prefix with style
+  const skip = new Set(['a','an','the','in','on','at','of','to','is','are','and','or','with','as','by','for','from','into','that','this','it','its']);
+  const words = (narration || '')
+    .replace(/[^a-zA-Z\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !skip.has(w.toLowerCase()))
+    .slice(0, 3)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+  const label = style.charAt(0).toUpperCase() + style.slice(1);
+  return words.length ? `${label}: ${words.join(' ')}` : label;
 }
 
 function makeEditName(vibe) {
