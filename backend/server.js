@@ -250,9 +250,9 @@ async function runPipeline(jobId, videoPath, style, ts) {
 
   // Step 1: Analyze
   setStep(jobId, 1);
-  let framePaths, narration, motionPrompt;
+  let framePaths, motionPrompt;
   try {
-    [[framePaths], { narration, motionPrompt }] = await Promise.all([
+    [[framePaths], { motionPrompt }] = await Promise.all([
       extractFrames(videoPath, framesDir, 1).then(f => [f]),
       analyzeVideo(videoPath, style),
     ]);
@@ -296,8 +296,6 @@ async function runPipeline(jobId, videoPath, style, ts) {
   // Step 4: Done
   setStep(jobId, 4, {
     result: {
-      narration,
-      style,
       transformedVideoUrl: `/outputs/transformed_${ts}.mp4`,
     },
   });
@@ -340,20 +338,36 @@ function computeTrim(info, maxDur = 8) {
 
 // ── Music selection ───────────────────────────────────────────────────────────
 
-// Parse vibe string for a specific artist or song to search for.
-// Returns a yt-dlp search query string, or null if none found.
+// Mainstream song pools by vibe — used when user doesn't specify a song
+const MAINSTREAM_SONGS = {
+  hype:     ["Drake God's Plan", 'Travis Scott SICKO MODE', 'Kendrick Lamar HUMBLE', 'Future MASK OFF', 'Lil Baby Drip Too Hard', 'Playboi Carti Magnolia', 'Roddy Ricch The Box'],
+  chill:    ['Frank Ocean Nights', 'Post Malone Circles', 'The Weeknd Call Out My Name', 'SZA Good Days', 'Daniel Caesar Best Part', 'Tyler the Creator See You Again'],
+  cinematic:['Kanye West Runaway', 'Kid Cudi Mr. Rager', 'Frank Ocean Pyramids', 'Bon Iver Holocene', 'James Blake Retrograde', 'Radiohead Exit Music'],
+  retro:    ['Daft Punk Get Lucky', 'Tame Impala The Less I Know The Better', 'Michael Jackson Thriller', 'Prince Purple Rain', 'Fleetwood Mac Dreams'],
+  default:  ['The Weeknd Blinding Lights', 'Dua Lipa Levitating', 'Harry Styles As It Was', 'Bad Bunny Tití Me Preguntó', 'Olivia Rodrigo drivers license', 'Jack Harlow First Class'],
+};
+
+function pickMainstreamSong(vibe) {
+  const v = (vibe || '').toLowerCase();
+  let pool;
+  if (v.match(/hype|fire|energy|fast|lit|hard/))    pool = MAINSTREAM_SONGS.hype;
+  else if (v.match(/chill|soft|calm|lo.?fi|dream/)) pool = MAINSTREAM_SONGS.chill;
+  else if (v.match(/cinematic|epic|film|dark/))      pool = MAINSTREAM_SONGS.cinematic;
+  else if (v.match(/retro|vhs|vintage|80s/))         pool = MAINSTREAM_SONGS.retro;
+  else                                                pool = MAINSTREAM_SONGS.default;
+  return pool[Math.floor(Math.random() * pool.length)] + ' audio';
+}
+
+// If user named a specific artist/song, return it as a yt-dlp search query
 function parseArtistSong(vibe) {
   const v = vibe || '';
   let m;
-  // "song: X" or "artist: X"
   m = v.match(/song:\s*([^,\n]+)/i);  if (m) return m[1].trim() + ' official audio';
   m = v.match(/artist:\s*([^,\n]+)/i); if (m) return m[1].trim() + ' music';
-  // "Artist - Song"
   m = v.match(/^([^,\n]+?)\s+-\s+([^,\n]+)/);
   if (m) return `${m[1].trim()} ${m[2].trim()} audio`;
-  // "in the style of X" / "like X" / "X vibe"
   m = v.match(/(?:in the style of|like|inspired by)\s+([a-zA-Z0-9\s]+?)(?:\s*,|$)/i);
-  if (m) return m[1].trim() + ' background music';
+  if (m) return m[1].trim() + ' official audio';
   return null;
 }
 
@@ -412,17 +426,19 @@ async function fetchJamendoTrack(vibe, ts) {
 
 // Returns path to a music file, or null if nothing found.
 async function findMusic(vibe, ts) {
-  // 1. yt-dlp — specific artist/song named in vibe field
-  const query = parseArtistSong(vibe);
   const ytdlp = findYtdlp();
-  if (query && ytdlp) {
+
+  // 1. yt-dlp: use user-specified song, or pick a mainstream song by default
+  if (ytdlp) {
+    const userQuery = parseArtistSong(vibe);
+    const searchQuery = userQuery || pickMainstreamSong(vibe);
     const out = path.join(__dirname, 'uploads', `music_${ts}.mp3`);
     try {
       execSync(
-        `"${ytdlp}" -x --audio-format mp3 --audio-quality 5 --no-playlist -o "${out}" "ytsearch1:${query}"`,
+        `"${ytdlp}" -x --audio-format mp3 --audio-quality 5 --no-playlist -o "${out}" "ytsearch1:${searchQuery}"`,
         { timeout: 60000, stdio: 'pipe' }
       );
-      if (fs.existsSync(out)) { console.log(`Music: yt-dlp "${query}"`); return out; }
+      if (fs.existsSync(out)) { console.log(`Music: yt-dlp "${searchQuery}"`); return out; }
     } catch (err) { console.warn('yt-dlp failed:', err.message); }
   }
 
@@ -439,7 +455,7 @@ async function findMusic(vibe, ts) {
     if (fs.existsSync(def)) { console.log('Music: bundled default.mp3'); return def; }
   }
 
-  // 3. Jamendo — free royalty-free music, no setup required
+  // 3. Jamendo — royalty-free fallback
   try {
     return await fetchJamendoTrack(vibe, ts);
   } catch (err) {
@@ -540,18 +556,9 @@ async function runEditPipeline(jobId, videoPaths, vibe, ts) {
 
   // Step 1: Get clip info + generate caption in parallel
   setStep(jobId, 1);
-  let infos, narration;
+  let infos;
   try {
-    [infos, narration] = await Promise.all([
-      Promise.all(videoPaths.map(p => getVideoInfo(p))),
-      (async () => {
-        const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-        const res = await model.generateContent(
-          `Write a short energetic 1-2 sentence caption for a video edit made from ${videoPaths.length} clip${videoPaths.length !== 1 ? 's' : ''}${vibe ? ` with the vibe: "${vibe}"` : ''}. Be hype and brief.`
-        );
-        return res.response.text().trim();
-      })().catch(() => `${videoPaths.length} clips${vibe ? ` — ${vibe}` : ''}`),
-    ]);
+    infos = await Promise.all(videoPaths.map(p => getVideoInfo(p)));
     console.log(`Edit: ${videoPaths.length} clips ready, computing trims`);
   } catch (err) {
     setStep(jobId, -1, { error: 'Could not read clips: ' + err.message });
@@ -562,7 +569,7 @@ async function runEditPipeline(jobId, videoPaths, vibe, ts) {
   const trims = infos.map(info => computeTrim(info, 8));
   trims.forEach((t, i) => console.log(`  Clip ${i + 1}: ${infos[i].duration.toFixed(1)}s → keep ${t.start.toFixed(1)}s–${(t.start + t.duration).toFixed(1)}s`));
 
-  // Step 2: Find music (yt-dlp → bundled files → Lyria → silent)
+  // Step 2: Find music (yt-dlp mainstream/user-pick → bundled files → Jamendo)
   setStep(jobId, 2);
   const musicFile = await findMusic(vibe, ts);
 
@@ -583,8 +590,6 @@ async function runEditPipeline(jobId, videoPaths, vibe, ts) {
 
   setStep(jobId, 4, {
     result: {
-      narration,
-      style: vibe || 'cinematic',
       transformedVideoUrl: `/outputs/edit_${ts}.mp4`,
     },
   });

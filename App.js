@@ -170,7 +170,6 @@ export default function App() {
         if (job.step === 4) {
           pollingRef.current = false;
           const finalResult = {
-            narration: job.result.narration,
             videoUrl: `${BACKEND_URL}${job.result.transformedVideoUrl}`,
             originalUri: jobMode === 'clip' ? capturedUri : null,
           };
@@ -522,13 +521,6 @@ export default function App() {
               ) : (
                 <VideoView player={transformedPlayer} style={s.video} allowsFullscreen allowsPictureInPicture />
               )}
-
-              {result?.narration ? (
-                <View style={s.narrationCard}>
-                  <Text style={s.narrationLabel}>{mode === 'edit' ? 'YOUR EDIT' : 'NARRATION'}</Text>
-                  <Text style={s.narrationBody}>{result.narration}</Text>
-                </View>
-              ) : null}
 
               <TouchableOpacity style={s.outlineBtn} onPress={handleReset}>
                 <Text style={s.outlineBtnText}>Make another</Text>
