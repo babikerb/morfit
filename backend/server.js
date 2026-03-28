@@ -373,9 +373,10 @@ function findYtdlp() {
 }
 
 // Jamendo: free royalty-free music API — no API key needed for basic use.
-// Optional: set JAMENDO_CLIENT_ID in .env (register free at developer.jamendo.com)
+// Requires JAMENDO_CLIENT_ID in .env (JAMENDO_CLIENT_SECRET is not needed for public track access)
 async function fetchJamendoTrack(vibe, ts) {
-  const clientId = process.env.JAMENDO_CLIENT_ID || 'b6747d04';
+  const clientId = process.env.JAMENDO_CLIENT_ID;
+  if (!clientId) throw new Error('JAMENDO_CLIENT_ID not set in .env');
   const v = (vibe || '').toLowerCase();
 
   let tags;
