@@ -230,6 +230,52 @@ async function generateVeoVideo(styledFrameB64, motionPrompt, aspectRatio) {
   throw new Error('Veo timed out');
 }
 
+// ── Naming + Metadata helpers ─────────────────────────────────────────────────
+
+function makeClipName(style, narration) {
+  // First clause of narration (up to first punctuation), capped at 50 chars, prefixed with style
+  const clause = (narration || '').split(/[.,!?]/)[0].trim();
+  const body   = clause.length > 48 ? clause.slice(0, 47) + '…' : clause;
+  const label  = style.charAt(0).toUpperCase() + style.slice(1);
+  return body ? `${label}: ${body}` : label;
+}
+
+function makeEditName(vibe) {
+  const v = (vibe || '').trim();
+  if (!v || v.length < 3) return 'Quick Edit';
+  const first = v.split(/[,\n]/)[0].trim();
+  return first.length > 50 ? first.slice(0, 47) + '…' : first;
+}
+
+function extractThumbnail(videoPath, thumbPath) {
+  return new Promise(resolve => {
+    ffmpeg(videoPath)
+      .inputOptions(['-ss 1'])
+      .outputOptions(['-frames:v 1', '-q:v 3'])
+      .output(thumbPath)
+      .on('end', resolve)
+      .on('error', resolve) // non-fatal
+      .run();
+  });
+}
+
+function writeMeta(ts, prefix, name, thumbnailUrl) {
+  try {
+    fs.writeFileSync(
+      path.join(__dirname, 'outputs', `meta_${prefix}${ts}.json`),
+      JSON.stringify({ name, thumbnailUrl })
+    );
+  } catch {}
+}
+
+function readMeta(ts, prefix) {
+  try {
+    return JSON.parse(fs.readFileSync(
+      path.join(__dirname, 'outputs', `meta_${prefix}${ts}.json`), 'utf8'
+    ));
+  } catch { return {}; }
+}
+
 // ── Pipeline (runs async after upload) ───────────────────────────────────────
 
 async function runPipeline(jobId, videoPath, style, ts) {
@@ -250,17 +296,27 @@ async function runPipeline(jobId, videoPath, style, ts) {
 
   // Step 1: Analyze
   setStep(jobId, 1);
-  let framePaths, motionPrompt;
+  let framePaths, motionPrompt, narration;
   try {
-    [[framePaths], { motionPrompt }] = await Promise.all([
+    let analysis;
+    [[framePaths], analysis] = await Promise.all([
       extractFrames(videoPath, framesDir, 1).then(f => [f]),
       analyzeVideo(videoPath, style),
     ]);
+    motionPrompt = analysis.motionPrompt;
+    narration    = analysis.narration;
     console.log('Analysis done.');
   } catch (err) {
     setStep(jobId, -1, { error: 'Analysis failed: ' + err.message });
     return;
   }
+
+  // Thumbnail + smart name
+  const thumbPath    = path.join(__dirname, 'outputs', `thumb_${ts}.jpg`);
+  const thumbUrl     = `/outputs/thumb_${ts}.jpg`;
+  try { fs.copyFileSync(framePaths[0], thumbPath); } catch {}
+  const clipName = makeClipName(style, narration);
+  writeMeta(ts, '', clipName, thumbUrl);
 
   // Step 2: Style frame
   setStep(jobId, 2);
@@ -297,6 +353,8 @@ async function runPipeline(jobId, videoPath, style, ts) {
   setStep(jobId, 4, {
     result: {
       transformedVideoUrl: `/outputs/transformed_${ts}.mp4`,
+      name: clipName,
+      thumbnailUrl: thumbUrl,
     },
   });
 }
@@ -581,6 +639,13 @@ async function runEditPipeline(jobId, videoPaths, vibe, ts) {
   const trims = infos.map(info => computeTrim(info, 8));
   trims.forEach((t, i) => console.log(`  Clip ${i + 1}: ${infos[i].duration.toFixed(1)}s → keep ${t.start.toFixed(1)}s–${(t.start + t.duration).toFixed(1)}s`));
 
+  // Thumbnail from first clip + smart name
+  const editThumbPath = path.join(__dirname, 'outputs', `thumb_edit_${ts}.jpg`);
+  const editThumbUrl  = `/outputs/thumb_edit_${ts}.jpg`;
+  await extractThumbnail(videoPaths[0], editThumbPath);
+  const editName = makeEditName(vibe);
+  writeMeta(ts, 'edit_', editName, editThumbUrl);
+
   // Step 2: Find music (yt-dlp mainstream/user-pick → bundled files → Jamendo)
   setStep(jobId, 2);
   const musicFile = await findMusic(vibe, ts);
@@ -607,6 +672,8 @@ async function runEditPipeline(jobId, videoPaths, vibe, ts) {
   setStep(jobId, 4, {
     result: {
       transformedVideoUrl: `/outputs/edit_${ts}.mp4`,
+      name: editName,
+      thumbnailUrl: editThumbUrl,
     },
   });
 }
@@ -666,21 +733,32 @@ app.get('/library', (_req, res) => {
   try { files = fs.readdirSync(outputsDir); }
   catch { return res.json({ generated: [], edits: [] }); }
 
-  const toItem = (prefix, type) => f => ({
-    id:        f.replace(prefix, '').replace('.mp4', ''),
-    url:       `/outputs/${f}`,
-    type,
-    createdAt: parseInt(f.replace(prefix, '').replace('.mp4', '')) || 0,
-  });
-
   const generated = files
     .filter(f => f.startsWith('transformed_') && f.endsWith('.mp4'))
-    .map(toItem('transformed_', 'generated'))
+    .map(f => {
+      const ts   = f.replace('transformed_', '').replace('.mp4', '');
+      const meta = readMeta(ts, '');
+      return {
+        id: ts, url: `/outputs/${f}`, type: 'generated',
+        createdAt: parseInt(ts) || 0,
+        name: meta.name || null,
+        thumbnailUrl: meta.thumbnailUrl || null,
+      };
+    })
     .sort((a, b) => b.createdAt - a.createdAt);
 
   const edits = files
     .filter(f => f.startsWith('edit_') && f.endsWith('.mp4'))
-    .map(toItem('edit_', 'edit'))
+    .map(f => {
+      const ts   = f.replace('edit_', '').replace('.mp4', '');
+      const meta = readMeta(ts, 'edit_');
+      return {
+        id: ts, url: `/outputs/${f}`, type: 'edit',
+        createdAt: parseInt(ts) || 0,
+        name: meta.name || null,
+        thumbnailUrl: meta.thumbnailUrl || null,
+      };
+    })
     .sort((a, b) => b.createdAt - a.createdAt);
 
   res.json({ generated, edits });

@@ -24,7 +24,6 @@ const EDIT_STATUS = [
   'Finding music…',
   'Stitching your edit…',
 ];
-const STEP_PROGRESS = [0.08, 0.28, 0.62, 0.84, 1.0];
 
 const STYLES = [
   { id: 'cyberpunk', label: 'Cyberpunk', bg: '#211535' },
@@ -129,13 +128,19 @@ export default function App() {
     Animated.spring(tabAnim, { toValue: toOriginal ? 1 : 0, tension: 80, friction: 10, useNativeDriver: false }).start();
   }
 
-  // ── Progress ────────────────────────────────────────────────────────────────
+  // ── Progress (continuous) ────────────────────────────────────────────────────
 
   useEffect(() => {
     if (screen !== 'processing') return;
-    const target = STEP_PROGRESS[backendStep] ?? 0;
-    Animated.timing(progressAnim, { toValue: target, duration: 700, useNativeDriver: false }).start();
-  }, [backendStep, screen]);
+    // Crawl to 88% over 3 min; pollJob snaps to 100% on completion
+    const anim = Animated.timing(progressAnim, {
+      toValue: 0.88,
+      duration: 180000,
+      useNativeDriver: false,
+    });
+    anim.start();
+    return () => anim.stop();
+  }, [screen]);
 
   // ── Recording ───────────────────────────────────────────────────────────────
 
@@ -183,8 +188,10 @@ export default function App() {
         if (job.step === 4) {
           pollingRef.current = false;
           const finalResult = {
-            videoUrl: `${BACKEND_URL}${job.result.transformedVideoUrl}`,
-            originalUri: jobMode === 'clip' ? capturedUri : null,
+            videoUrl:     `${BACKEND_URL}${job.result.transformedVideoUrl}`,
+            originalUri:  jobMode === 'clip' ? capturedUri : null,
+            name:         job.result.name || null,
+            thumbnailUrl: job.result.thumbnailUrl ? `${BACKEND_URL}${job.result.thumbnailUrl}` : null,
           };
           Animated.timing(progressAnim, { toValue: 1.0, duration: 600, useNativeDriver: false }).start(() => {
             closeModal(() => {
@@ -584,6 +591,8 @@ export default function App() {
                 <VideoView player={transformedPlayer} style={s.video} allowsFullscreen allowsPictureInPicture />
               )}
 
+              {result?.name ? <Text style={s.resultName}>{result.name}</Text> : null}
+
               {saveMsg ? <View style={s.saveMsgBanner}><Text style={s.saveMsgText}>{saveMsg}</Text></View> : null}
 
               <TouchableOpacity style={s.primaryBtn} onPress={() => saveVideo(result?.videoUrl)}>
@@ -645,14 +654,17 @@ export default function App() {
                         activeOpacity={0.8}
                       >
                         <View style={s.libCardThumb}>
-                          <Text style={s.libPlayIcon}>▶</Text>
+                          {item.thumbnailUrl
+                            ? <Image source={{ uri: `${BACKEND_URL}${item.thumbnailUrl}` }} style={s.libCardThumbImg} resizeMode="cover" />
+                            : <Text style={s.libPlayIcon}>▶</Text>
+                          }
                         </View>
                         <View style={s.libCardInfo}>
-                          <Text style={s.libCardType}>
-                            {item.type === 'generated' ? 'GENERATED' : 'EDIT'}
+                          <Text style={s.libCardName} numberOfLines={1}>
+                            {item.name || (item.type === 'generated' ? 'Generated Clip' : 'Edit')}
                           </Text>
                           <Text style={s.libCardDate}>
-                            {new Date(item.createdAt).toLocaleDateString()}
+                            {new Date(item.createdAt).toLocaleDateString()} · {new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </Text>
                         </View>
                         <TouchableOpacity
@@ -676,13 +688,14 @@ export default function App() {
         {screen === 'libraryPlayer' && (
           <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
             <View style={s.stylePad}>
-              <View style={s.rowHeader}>
-                <TouchableOpacity onPress={() => goTo('library', 'back')}>
+              <View style={s.libPlayerHeader}>
+                <TouchableOpacity style={s.libPlayerBack} onPress={() => goTo('library', 'back')}>
                   <Text style={s.backLink}>← Back</Text>
                 </TouchableOpacity>
-                <Text style={s.sectionLabel}>
-                  {selectedItem?.type === 'generated' ? 'Generated Clip' : 'Edit'}
+                <Text style={s.libPlayerTitle}>
+                  {selectedItem?.name || (selectedItem?.type === 'generated' ? 'Generated Clip' : 'Edit')}
                 </Text>
+                <View style={s.libPlayerBack} />
               </View>
 
               <VideoView player={libraryPlayer} style={s.video} allowsFullscreen allowsPictureInPicture />
@@ -796,6 +809,7 @@ const s = StyleSheet.create({
   progressFill: { height: '100%', backgroundColor: C.accent, borderRadius: 1 },
 
   // Result
+  resultName:    { fontSize: 15, fontWeight: '600', color: C.text, textAlign: 'center', paddingHorizontal: 8 },
   resultPad:     { padding: 16, gap: 14, paddingBottom: 52 },
   tabBar:        { flexDirection: 'row', backgroundColor: C.surface, borderRadius: 14, padding: 3, position: 'relative', height: 46 },
   tabIndicator:  { position: 'absolute', top: 3, bottom: 3, backgroundColor: C.elevated, borderRadius: 11, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.3, shadowRadius: 4 },
@@ -823,11 +837,15 @@ const s = StyleSheet.create({
   libEmptyText:     { fontSize: 16, fontWeight: '600', color: C.textMid },
   libGrid:          { gap: 10, paddingBottom: 40 },
   libCard:          { flexDirection: 'row', alignItems: 'center', backgroundColor: C.surface, borderRadius: 14, borderWidth: 1, borderColor: C.border, overflow: 'hidden' },
-  libCardThumb:     { width: 80, height: 60, backgroundColor: C.elevated, alignItems: 'center', justifyContent: 'center' },
+  libCardThumb:     { width: 80, height: 60, backgroundColor: C.elevated, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  libCardThumbImg:  { width: 80, height: 60 },
   libPlayIcon:      { fontSize: 16, color: C.textMid },
   libCardInfo:      { flex: 1, paddingHorizontal: 14, gap: 4 },
-  libCardType:      { fontSize: 10, fontWeight: '700', color: C.accent, letterSpacing: 1.5 },
-  libCardDate:      { fontSize: 12, color: C.textMid },
+  libCardName:      { fontSize: 13, fontWeight: '600', color: C.text },
+  libCardDate:      { fontSize: 11, color: C.textMid },
   libDownloadBtn:   { width: 48, height: 60, alignItems: 'center', justifyContent: 'center' },
   libDownloadText:  { fontSize: 22, color: C.textMid, fontWeight: '300' },
+  libPlayerHeader:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  libPlayerBack:    { width: 60 },
+  libPlayerTitle:   { flex: 1, textAlign: 'center', fontSize: 13, fontWeight: '600', color: C.text, letterSpacing: 0.5 },
 });
