@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   Text, View, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, Image, Dimensions, SafeAreaView, Animated, Keyboard,
+  TextInput, Image, Dimensions, SafeAreaView, Animated, Keyboard, ActivityIndicator,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { StatusBar } from 'expo-status-bar';
+import * as MediaLibrary from 'expo-media-library';
+import * as FileSystem from 'expo-file-system';
 
 const BACKEND_URL = 'https://nippily-goosepimply-lilah.ngrok-free.dev';
 const { width: SW } = Dimensions.get('window');
@@ -22,7 +24,6 @@ const EDIT_STATUS = [
   'Finding music…',
   'Stitching your edit…',
 ];
-// Progress target per backend step (0=uploading, 1=analyze, 2=style, 3=generate, 4=done)
 const STEP_PROGRESS = [0.08, 0.28, 0.62, 0.84, 1.0];
 
 const STYLES = [
@@ -65,6 +66,13 @@ export default function App() {
   const [showOriginal, setShowOriginal] = useState(false);
   const [styleError, setStyleError]     = useState('');
 
+  // Library
+  const [libraryItems, setLibraryItems]     = useState({ generated: [], edits: [] });
+  const [libraryTab, setLibraryTab]         = useState('generated');
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [selectedItem, setSelectedItem]     = useState(null);
+  const [saveMsg, setSaveMsg]               = useState('');
+
   const pollingRef = useRef(false);
 
   const slideAnim    = useRef(new Animated.Value(0)).current;
@@ -76,6 +84,7 @@ export default function App() {
   const previewPlayer     = useVideoPlayer(capturedUri, p => { p.loop = true; p.volume = 0; });
   const originalPlayer    = useVideoPlayer(result?.originalUri ?? null, p => { p.loop = true; });
   const transformedPlayer = useVideoPlayer(result?.videoUrl    ?? null, p => { p.loop = true; });
+  const libraryPlayer     = useVideoPlayer(selectedItem?.url   ?? null, p => { p.loop = true; });
 
   useEffect(() => {
     if (screen === 'style' && capturedUri) previewPlayer.play();
@@ -87,6 +96,11 @@ export default function App() {
     if (showOriginal) { originalPlayer.play(); transformedPlayer.pause?.(); }
     else              { transformedPlayer.play(); originalPlayer.pause?.(); }
   }, [screen, showOriginal]);
+
+  useEffect(() => {
+    if (screen === 'libraryPlayer' && selectedItem) libraryPlayer.play();
+    else libraryPlayer.pause?.();
+  }, [screen, selectedItem]);
 
   // ── Navigation ─────────────────────────────────────────────────────────────
 
@@ -115,7 +129,7 @@ export default function App() {
     Animated.spring(tabAnim, { toValue: toOriginal ? 1 : 0, tension: 80, friction: 10, useNativeDriver: false }).start();
   }
 
-  // ── Progress (step-based) ───────────────────────────────────────────────────
+  // ── Progress ────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     if (screen !== 'processing') return;
@@ -155,7 +169,7 @@ export default function App() {
     }
   }
 
-  // shared polling
+  // ── Polling ─────────────────────────────────────────────────────────────────
 
   async function pollJob(id, jobMode) {
     pollingRef.current = true;
@@ -270,6 +284,43 @@ export default function App() {
     await pollJob(id, 'edit');
   }
 
+  // ── Download / Save ─────────────────────────────────────────────────────────
+
+  async function saveVideo(url) {
+    if (!url) return;
+    const { status } = await MediaLibrary.requestPermissionsAsync();
+    if (status !== 'granted') { setSaveMsg('Camera roll permission denied'); return; }
+    setSaveMsg('Saving…');
+    try {
+      const filename = url.split('/').pop().split('?')[0];
+      const localUri = FileSystem.documentDirectory + filename;
+      await FileSystem.downloadAsync(url, localUri);
+      await MediaLibrary.saveToLibraryAsync(localUri);
+      setSaveMsg('Saved to Camera Roll ✓');
+    } catch {
+      setSaveMsg('Save failed');
+    }
+    setTimeout(() => setSaveMsg(''), 2500);
+  }
+
+  // ── Library ─────────────────────────────────────────────────────────────────
+
+  async function openLibrary() {
+    goTo('library');
+    setLibraryLoading(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/library`);
+      const data = await res.json();
+      setLibraryItems(data);
+    } catch { setLibraryItems({ generated: [], edits: [] }); }
+    setLibraryLoading(false);
+  }
+
+  function openLibraryItem(item) {
+    setSelectedItem(item);
+    goTo('libraryPlayer');
+  }
+
   // ── Reset ───────────────────────────────────────────────────────────────────
 
   function handleReset() {
@@ -283,7 +334,7 @@ export default function App() {
     goTo('home', 'back');
   }
 
-  // ── Animated screen layer ─────────────────────────────────────────────────────
+  // ── Derived ─────────────────────────────────────────────────────────────────
 
   const TAB_W = (SW - 32 - 6) / 2;
   const tabIndicatorX = tabAnim.interpolate({ inputRange: [0, 1], outputRange: [3, TAB_W + 3] });
@@ -291,6 +342,8 @@ export default function App() {
   const statusMsg = !jobId
     ? STATUS_MSGS[0]
     : STATUS_MSGS[Math.min(backendStep, STATUS_MSGS.length - 1)];
+
+  const activeLibItems = libraryTab === 'generated' ? libraryItems.generated : libraryItems.edits;
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -303,8 +356,16 @@ export default function App() {
           <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
             <View style={s.homePad}>
               <View style={s.homeHeader}>
-                <Text style={s.homeWordmark}>MORFIT</Text>
-                <Text style={s.homeSub}>What do you want to make?</Text>
+                <View style={s.homeTopRow}>
+                  <View>
+                    <Text style={s.homeWordmark}>MORFIT</Text>
+                    <View style={s.homeAccentLine} />
+                  </View>
+                  <TouchableOpacity style={s.libraryBtn} onPress={openLibrary}>
+                    <Text style={s.libraryBtnText}>Library</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={s.homeSub}>What do you{'\n'}want to make?</Text>
               </View>
 
               <TouchableOpacity
@@ -312,16 +373,18 @@ export default function App() {
                 activeOpacity={0.85}
                 onPress={() => { setMode('clip'); goTo('clipChoice'); }}
               >
-                <Text style={s.modeLabel}>Clip Generator</Text>
+                <View style={s.modeCardAccentBar} />
+                <Text style={s.modeLabel}>Clip Morfer</Text>
                 <Text style={s.modeDesc}>Record or upload a video and transform it into a fully AI-generated styled clip.</Text>
                 <Text style={s.modeCta}>Get started  →</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[s.modeCard, s.modeCardAccent]}
+                style={[s.modeCard, s.modeCardAlt]}
                 activeOpacity={0.85}
                 onPress={() => { setMode('edit'); goTo('editUpload'); }}
               >
+                <View style={[s.modeCardAccentBar, { backgroundColor: C.textFaint }]} />
                 <Text style={s.modeLabel}>Edit Maker</Text>
                 <Text style={s.modeDesc}>Drop multiple clips and let AI cut them into one fire edit.</Text>
                 <Text style={s.modeCta}>Get started  →</Text>
@@ -330,14 +393,14 @@ export default function App() {
           </SafeAreaView>
         )}
 
-        {/* ── Clip Choice screen ── */}
+        {/* ── Clip Choice ── */}
         {screen === 'clipChoice' && (
           <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
             <View style={s.choiceWrap}>
               <TouchableOpacity onPress={() => goTo('home', 'back')}>
-                <Text style={s.backLink}>Back</Text>
+                <Text style={s.backLink}>← Back</Text>
               </TouchableOpacity>
-              <Text style={s.choiceTitle}>Clip Generator</Text>
+              <Text style={s.choiceTitle}>Clip Morfer</Text>
               <Text style={s.choiceSub}>Transform a video into a fully AI-generated styled clip.</Text>
               <View style={s.choiceCenter}>
                 <TouchableOpacity style={s.recordCircle} onPress={handleRecord} activeOpacity={0.8}>
@@ -407,13 +470,13 @@ export default function App() {
           </SafeAreaView>
         )}
 
-        {/* ── Edit Upload screen ── */}
+        {/* ── Edit Upload ── */}
         {screen === 'editUpload' && (
           <SafeAreaView style={s.bg}>
             <ScrollView contentContainerStyle={s.stylePad} keyboardShouldPersistTaps="handled">
               <View style={s.rowHeader}>
                 <TouchableOpacity onPress={() => goTo('home', 'back')}>
-                  <Text style={s.backLink}>Back</Text>
+                  <Text style={s.backLink}>← Back</Text>
                 </TouchableOpacity>
                 <Text style={s.sectionLabel}>Edit Maker</Text>
               </View>
@@ -461,13 +524,13 @@ export default function App() {
           </SafeAreaView>
         )}
 
-        {/* ── Edit Prompt screen ── */}
+        {/* ── Edit Prompt ── */}
         {(screen === 'editPrompt' || (screen === 'processing' && mode === 'edit')) && (
           <SafeAreaView style={s.bg}>
             <ScrollView contentContainerStyle={s.stylePad} keyboardShouldPersistTaps="handled">
               <View style={s.rowHeader}>
                 <TouchableOpacity onPress={() => goTo('editUpload', 'back')}>
-                  <Text style={s.backLink}>Back</Text>
+                  <Text style={s.backLink}>← Back</Text>
                 </TouchableOpacity>
                 <Text style={s.sectionLabel}>{editClips.length} clip{editClips.length !== 1 ? 's' : ''} selected</Text>
               </View>
@@ -496,7 +559,7 @@ export default function App() {
           </SafeAreaView>
         )}
 
-        {/* ── Result screen ── */}
+        {/* ── Result ── */}
         {screen === 'result' && (
           <SafeAreaView style={s.bg}>
             <ScrollView contentContainerStyle={s.resultPad}>
@@ -521,6 +584,12 @@ export default function App() {
                 <VideoView player={transformedPlayer} style={s.video} allowsFullscreen allowsPictureInPicture />
               )}
 
+              {saveMsg ? <View style={s.saveMsgBanner}><Text style={s.saveMsgText}>{saveMsg}</Text></View> : null}
+
+              <TouchableOpacity style={s.primaryBtn} onPress={() => saveVideo(result?.videoUrl)}>
+                <Text style={s.primaryBtnText}>Save to Camera Roll</Text>
+              </TouchableOpacity>
+
               <TouchableOpacity style={s.outlineBtn} onPress={handleReset}>
                 <Text style={s.outlineBtnText}>Make another</Text>
               </TouchableOpacity>
@@ -528,9 +597,108 @@ export default function App() {
           </SafeAreaView>
         )}
 
+        {/* ── Library ── */}
+        {screen === 'library' && (
+          <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
+            <View style={s.libraryWrap}>
+              <View style={s.rowHeader}>
+                <TouchableOpacity onPress={() => goTo('home', 'back')}>
+                  <Text style={s.backLink}>← Back</Text>
+                </TouchableOpacity>
+                <Text style={s.libraryTitle}>Library</Text>
+              </View>
+
+              <View style={s.libTabRow}>
+                <TouchableOpacity
+                  style={[s.libTabBtn, libraryTab === 'generated' && s.libTabBtnActive]}
+                  onPress={() => setLibraryTab('generated')}
+                >
+                  <Text style={[s.libTabText, libraryTab === 'generated' && s.libTabTextActive]}>Generated</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[s.libTabBtn, libraryTab === 'edits' && s.libTabBtnActive]}
+                  onPress={() => setLibraryTab('edits')}
+                >
+                  <Text style={[s.libTabText, libraryTab === 'edits' && s.libTabTextActive]}>Edits</Text>
+                </TouchableOpacity>
+              </View>
+
+              {libraryLoading ? (
+                <View style={s.libEmpty}>
+                  <ActivityIndicator color={C.accent} />
+                </View>
+              ) : activeLibItems.length === 0 ? (
+                <View style={s.libEmpty}>
+                  <Text style={s.libEmptyText}>Nothing here yet</Text>
+                  <Text style={s.ghost}>
+                    {libraryTab === 'generated' ? 'Generated clips' : 'Edits'} will appear here
+                  </Text>
+                </View>
+              ) : (
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  <View style={s.libGrid}>
+                    {activeLibItems.map(item => (
+                      <TouchableOpacity
+                        key={item.id}
+                        style={s.libCard}
+                        onPress={() => openLibraryItem({ ...item, url: `${BACKEND_URL}${item.url}` })}
+                        activeOpacity={0.8}
+                      >
+                        <View style={s.libCardThumb}>
+                          <Text style={s.libPlayIcon}>▶</Text>
+                        </View>
+                        <View style={s.libCardInfo}>
+                          <Text style={s.libCardType}>
+                            {item.type === 'generated' ? 'GENERATED' : 'EDIT'}
+                          </Text>
+                          <Text style={s.libCardDate}>
+                            {new Date(item.createdAt).toLocaleDateString()}
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          style={s.libDownloadBtn}
+                          onPress={() => saveVideo(`${BACKEND_URL}${item.url}`)}
+                        >
+                          <Text style={s.libDownloadText}>↓</Text>
+                        </TouchableOpacity>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </ScrollView>
+              )}
+
+              {saveMsg ? <View style={s.saveMsgBanner}><Text style={s.saveMsgText}>{saveMsg}</Text></View> : null}
+            </View>
+          </SafeAreaView>
+        )}
+
+        {/* ── Library Player ── */}
+        {screen === 'libraryPlayer' && (
+          <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
+            <View style={s.stylePad}>
+              <View style={s.rowHeader}>
+                <TouchableOpacity onPress={() => goTo('library', 'back')}>
+                  <Text style={s.backLink}>← Back</Text>
+                </TouchableOpacity>
+                <Text style={s.sectionLabel}>
+                  {selectedItem?.type === 'generated' ? 'Generated Clip' : 'Edit'}
+                </Text>
+              </View>
+
+              <VideoView player={libraryPlayer} style={s.video} allowsFullscreen allowsPictureInPicture />
+
+              {saveMsg ? <View style={s.saveMsgBanner}><Text style={s.saveMsgText}>{saveMsg}</Text></View> : null}
+
+              <TouchableOpacity style={s.primaryBtn} onPress={() => saveVideo(selectedItem?.url)}>
+                <Text style={s.primaryBtnText}>Save to Camera Roll</Text>
+              </TouchableOpacity>
+            </View>
+          </SafeAreaView>
+        )}
+
       </Animated.View>
 
-      {/* ── Processing modal overlay ── */}
+      {/* ── Processing modal ── */}
       {screen === 'processing' && (
         <>
           <Animated.View style={[s.backdrop, { opacity: backdropAnim }]} />
@@ -572,15 +740,20 @@ const s = StyleSheet.create({
   uploadChoiceText:  { fontSize: 15, fontWeight: '600', color: C.text },
 
   // Home
-  homePad:      { flex: 1, padding: 24, gap: 16 },
-  homeHeader:   { marginBottom: 8 },
-  homeWordmark: { fontSize: 12, fontWeight: '700', color: C.text, letterSpacing: 4 },
-  homeSub:      { fontSize: 26, fontWeight: '700', color: C.text, marginTop: 10, lineHeight: 32 },
-  modeCard:     { flex: 1, borderRadius: 18, backgroundColor: C.surface, padding: 24, gap: 10, borderWidth: 1, borderColor: C.border },
-  modeCardAccent: { borderColor: C.accent + '40' },
-  modeLabel:    { fontSize: 20, fontWeight: '700', color: C.text },
-  modeDesc:     { fontSize: 14, color: C.textMid, lineHeight: 22 },
-  modeCta:      { fontSize: 13, color: C.textMid, marginTop: 4 },
+  homePad:          { flex: 1, padding: 24, gap: 16 },
+  homeHeader:       { marginBottom: 8 },
+  homeTopRow:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  homeWordmark:     { fontSize: 15, fontWeight: '800', color: C.text, letterSpacing: 5 },
+  homeAccentLine:   { width: 28, height: 2, backgroundColor: C.accent, marginTop: 5 },
+  homeSub:          { fontSize: 28, fontWeight: '700', color: C.text, marginTop: 16, lineHeight: 34 },
+  libraryBtn:       { borderWidth: 1, borderColor: C.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
+  libraryBtnText:   { fontSize: 12, color: C.textMid, fontWeight: '600', letterSpacing: 0.5 },
+  modeCard:         { flex: 1, borderRadius: 18, backgroundColor: C.surface, padding: 24, gap: 10, borderWidth: 1, borderColor: C.border, overflow: 'hidden' },
+  modeCardAlt:      { borderColor: C.border },
+  modeCardAccentBar:{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, backgroundColor: C.accent },
+  modeLabel:        { fontSize: 20, fontWeight: '700', color: C.text },
+  modeDesc:         { fontSize: 14, color: C.textMid, lineHeight: 22 },
+  modeCta:          { fontSize: 13, color: C.textMid, marginTop: 4 },
 
   // Style screen
   stylePad:        { padding: 20, gap: 20, paddingBottom: 52 },
@@ -618,12 +791,12 @@ const s = StyleSheet.create({
   modalHandle:  { width: 36, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: 'center', marginBottom: 28 },
   modalTitle:   { fontSize: 22, fontWeight: '700', color: C.text, letterSpacing: -0.3 },
   modalStyle:   { fontSize: 11, color: C.accent, letterSpacing: 2.5, marginTop: 4 },
-  progressMsg:  { fontSize: 13, color: C.textMid, marginTop: 24, marginBottom: 14, fontFamily: undefined },
+  progressMsg:  { fontSize: 13, color: C.textMid, marginTop: 24, marginBottom: 14 },
   progressTrack:{ height: 2, backgroundColor: C.border, borderRadius: 1, overflow: 'hidden' },
   progressFill: { height: '100%', backgroundColor: C.accent, borderRadius: 1 },
 
   // Result
-  resultPad:     { padding: 16, gap: 16, paddingBottom: 52 },
+  resultPad:     { padding: 16, gap: 14, paddingBottom: 52 },
   tabBar:        { flexDirection: 'row', backgroundColor: C.surface, borderRadius: 14, padding: 3, position: 'relative', height: 46 },
   tabIndicator:  { position: 'absolute', top: 3, bottom: 3, backgroundColor: C.elevated, borderRadius: 11, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.3, shadowRadius: 4 },
   tabBtn:        { flex: 1, alignItems: 'center', justifyContent: 'center', zIndex: 1 },
@@ -633,4 +806,28 @@ const s = StyleSheet.create({
   narrationCard: { backgroundColor: C.surface, borderRadius: 14, padding: 18, borderWidth: 1, borderColor: C.border },
   narrationLabel:{ fontSize: 10, fontWeight: '700', color: C.textMid, marginBottom: 10, letterSpacing: 1.5 },
   narrationBody: { fontSize: 15, lineHeight: 26, color: C.textMid },
+
+  // Save banner
+  saveMsgBanner: { backgroundColor: C.surface, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 14, borderWidth: 1, borderColor: C.accent + '50', alignItems: 'center' },
+  saveMsgText:   { fontSize: 13, color: C.accent, fontWeight: '600' },
+
+  // Library
+  libraryWrap:      { flex: 1, padding: 20, gap: 18 },
+  libraryTitle:     { fontSize: 18, fontWeight: '700', color: C.text },
+  libTabRow:        { flexDirection: 'row', gap: 8 },
+  libTabBtn:        { paddingHorizontal: 18, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: C.border, backgroundColor: C.surface },
+  libTabBtnActive:  { borderColor: C.accent, backgroundColor: C.accent + '18' },
+  libTabText:       { fontSize: 13, fontWeight: '600', color: C.textMid },
+  libTabTextActive: { color: C.accent },
+  libEmpty:         { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, paddingTop: 60 },
+  libEmptyText:     { fontSize: 16, fontWeight: '600', color: C.textMid },
+  libGrid:          { gap: 10, paddingBottom: 40 },
+  libCard:          { flexDirection: 'row', alignItems: 'center', backgroundColor: C.surface, borderRadius: 14, borderWidth: 1, borderColor: C.border, overflow: 'hidden' },
+  libCardThumb:     { width: 80, height: 60, backgroundColor: C.elevated, alignItems: 'center', justifyContent: 'center' },
+  libPlayIcon:      { fontSize: 16, color: C.textMid },
+  libCardInfo:      { flex: 1, paddingHorizontal: 14, gap: 4 },
+  libCardType:      { fontSize: 10, fontWeight: '700', color: C.accent, letterSpacing: 1.5 },
+  libCardDate:      { fontSize: 12, color: C.textMid },
+  libDownloadBtn:   { width: 48, height: 60, alignItems: 'center', justifyContent: 'center' },
+  libDownloadText:  { fontSize: 22, color: C.textMid, fontWeight: '300' },
 });
