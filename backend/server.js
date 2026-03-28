@@ -170,6 +170,14 @@ async function generateStyledFrame(prompt, aspectRatio) {
       }),
     }
   );
+  
+  // ✅ Check content type before parsing JSON
+  const contentType = response.headers.get('content-type');
+  if (!contentType || !contentType.includes('application/json')) {
+    const text = await response.text();
+    throw new Error(`Imagen API returned non-JSON (status ${response.status}): ${text.slice(0, 200)}`);
+  }
+  
   const data = await response.json();
   if (!data.predictions?.[0]?.bytesBase64Encoded) {
     throw new Error('Imagen error: ' + JSON.stringify(data).slice(0, 200));
