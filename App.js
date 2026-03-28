@@ -156,7 +156,7 @@ export default function App() {
     }
   }
 
-  // ── Shared polling ──────────────────────────────────────────────────────────
+  // shared polling
 
   async function pollJob(id, jobMode) {
     pollingRef.current = true;
@@ -549,7 +549,7 @@ export default function App() {
             {mode === 'clip' && (
               <Text style={s.modalStyle}>{(customStyle.trim() || style).toUpperCase()}</Text>
             )}
-            <Text style={s.progressMsg}>{statusMsg}</Text>
+            <Text style={s.progressMsg}>{'> ' + statusMsg}</Text>
             <View style={s.progressTrack}>
               <Animated.View style={[s.progressFill, {
                 width: progressAnim.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }),

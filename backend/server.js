@@ -357,9 +357,19 @@ function parseArtistSong(vibe) {
   return null;
 }
 
-function ytdlpAvailable() {
-  try { execSync('which yt-dlp', { stdio: 'ignore' }); return true; }
-  catch { return false; }
+function findYtdlp() {
+  const candidates = [
+    'yt-dlp',
+    '/opt/homebrew/bin/yt-dlp',
+    '/usr/local/bin/yt-dlp',
+    '/usr/bin/yt-dlp',
+    `${process.env.HOME}/.local/bin/yt-dlp`,
+  ];
+  for (const bin of candidates) {
+    try { execSync(`"${bin}" --version`, { stdio: 'ignore' }); return bin; }
+    catch { /* try next */ }
+  }
+  return null;
 }
 
 // Lyria 2 via Vertex AI.
@@ -391,16 +401,19 @@ async function generateLyriaMusic(prompt, durationSecs) {
 // Returns path to a music file, or null if nothing found.
 async function findMusic(vibe, totalDur, ts) {
   // 1. yt-dlp — specific artist/song from vibe string
-  const query = parseArtistSong(vibe);
-  if (query && ytdlpAvailable()) {
+  const query  = parseArtistSong(vibe);
+  const ytdlp  = findYtdlp();
+  if (query && ytdlp) {
     const out = path.join(__dirname, 'uploads', `music_${ts}.mp3`);
     try {
       execSync(
-        `yt-dlp -x --audio-format mp3 --audio-quality 5 --no-playlist -o "${out}" "ytsearch1:${query}"`,
+        `"${ytdlp}" -x --audio-format mp3 --audio-quality 5 --no-playlist -o "${out}" "ytsearch1:${query}"`,
         { timeout: 60000, stdio: 'pipe' }
       );
       if (fs.existsSync(out)) { console.log(`Music: yt-dlp "${query}"`); return out; }
     } catch (err) { console.warn('yt-dlp failed:', err.message); }
+  } else if (query) {
+    console.log('Music: yt-dlp not found — install with: brew install yt-dlp');
   }
 
   // 2. Pre-bundled tracks in backend/music/
