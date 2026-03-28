@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /Users/csuftitan/Desktop/morfit/backend/uploads/*.mp4)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
