@@ -1,20 +1,20 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 
 const express = require('express');
-const multer = require('multer');
-const cors = require('cors');
-const path = require('path');
-const fs = require('fs');
-const ffmpeg = require('fluent-ffmpeg');
+const multer  = require('multer');
+const cors    = require('cors');
+const path    = require('path');
+const fs      = require('fs');
+const ffmpeg  = require('fluent-ffmpeg');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleAIFileManager } = require('@google/generative-ai/server');
 
-const app = express();
-const PORT = 3001;
+const app      = express();
+const PORT     = 3001;
 const GEMINI_KEY = process.env.tier_3_gemini_key;
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
-const genAI = new GoogleGenerativeAI(GEMINI_KEY);
+const genAI       = new GoogleGenerativeAI(GEMINI_KEY);
 const fileManager = new GoogleAIFileManager(GEMINI_KEY);
 
 app.use(cors());
@@ -26,11 +26,20 @@ fs.mkdirSync(path.join(__dirname, 'outputs'), { recursive: true });
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, path.join(__dirname, 'uploads')),
-  filename: (req, file, cb) => cb(null, `video_${Date.now()}.mp4`),
+  filename:    (req, file, cb) => cb(null, `video_${Date.now()}.mp4`),
 });
 const upload = multer({ storage, limits: { fileSize: 500 * 1024 * 1024 } });
 
-// ── Video info ───────────────────────────────────────────────────────────────
+// ── Job store ─────────────────────────────────────────────────────────────────
+// step: 0=received, 1=analyzing, 2=styling frame, 3=generating veo, 4=done, -1=error
+
+const jobs = new Map();
+
+function setStep(jobId, step, extra = {}) {
+  jobs.set(jobId, { step, ...extra });
+}
+
+// ── Video info ────────────────────────────────────────────────────────────────
 
 function getVideoInfo(videoPath) {
   return new Promise((resolve, reject) => {
@@ -42,7 +51,7 @@ function getVideoInfo(videoPath) {
   });
 }
 
-// ── Extract frames ───────────────────────────────────────────────────────────
+// ── Extract frames ────────────────────────────────────────────────────────────
 
 function extractFrames(videoPath, outputDir, fps) {
   return new Promise((resolve, reject) => {
@@ -61,7 +70,7 @@ function extractFrames(videoPath, outputDir, fps) {
   });
 }
 
-// ── Step A: Analyze full video with Gemini (narration + motion description) ──
+// ── Step A: Analyze full video ────────────────────────────────────────────────
 
 async function analyzeVideo(videoPath, style) {
   console.log('Uploading video to Gemini...');
@@ -78,7 +87,7 @@ async function analyzeVideo(videoPath, style) {
 
   const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
-  const [narrationRes, motionRes] = await Promise.all([
+  const [narrationRes, motionRes, audioRes] = await Promise.all([
     model.generateContent([
       { fileData: { mimeType: file.mimeType, fileUri: file.uri } },
       'Write a vivid 2-3 sentence narration of this video as a movie scene.',
@@ -101,15 +110,31 @@ Include "${style}" visual elements (lighting, colors, atmosphere).
 
 Reply with ONLY the final Veo prompt. 200-300 words.`,
     ]),
+    model.generateContent([
+      { fileData: { mimeType: file.mimeType, fileUri: file.uri } },
+      `Transcribe this video's audio exactly.
+- Quote all speech word-for-word with speaker labels if multiple people
+- Describe tone/emotion (e.g. laughing, whispering, shouting)
+- Note significant background sounds, music, or ambient noise
+- Note silence if there is none
+Be concise and precise.`,
+    ]),
   ]);
+
+  const transcription = audioRes.response.text().trim();
+  const basePrompt    = motionRes.response.text().trim();
+  const motionPrompt  = transcription
+    ? `${basePrompt}\n\nAudio to reproduce: ${transcription}`
+    : basePrompt;
 
   return {
     narration: narrationRes.response.text().trim(),
-    motionPrompt: motionRes.response.text().trim(),
+    motionPrompt,
+    transcription,
   };
 }
 
-// ── Step B: Build Imagen prompt for first frame ──────────────────────────────
+// ── Step B: Build Imagen prompt for first frame ───────────────────────────────
 
 async function buildFirstFramePrompt(framePath, style, model) {
   const imageData = fs.readFileSync(framePath).toString('base64');
@@ -138,7 +163,7 @@ async function generateStyledFrame(prompt, aspectRatio) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        instances: [{ prompt }],
+        instances:  [{ prompt }],
         parameters: { sampleCount: 1, aspectRatio },
       }),
     }
@@ -152,7 +177,7 @@ async function generateStyledFrame(prompt, aspectRatio) {
 
 // ── Step D: Veo image-to-video ────────────────────────────────────────────────
 
-async function generateVeoVideo(styledFrameB64, motionPrompt, aspectRatio, duration) {
+async function generateVeoVideo(styledFrameB64, motionPrompt, aspectRatio) {
   console.log('Sending styled frame + motion prompt to Veo...');
   const response = await fetch(
     `${API_BASE}/models/veo-3.0-fast-generate-001:predictLongRunning?key=${GEMINI_KEY}`,
@@ -164,7 +189,7 @@ async function generateVeoVideo(styledFrameB64, motionPrompt, aspectRatio, durat
           prompt: motionPrompt,
           image: { bytesBase64Encoded: styledFrameB64, mimeType: 'image/jpeg' },
         }],
-        parameters: { aspectRatio, durationSeconds: duration },
+        parameters: { aspectRatio },
       }),
     }
   );
@@ -173,17 +198,15 @@ async function generateVeoVideo(styledFrameB64, motionPrompt, aspectRatio, durat
   if (!opData.name) throw new Error('Veo no operation returned: ' + JSON.stringify(opData).slice(0, 200));
   console.log('Veo operation:', opData.name);
 
-  // Poll up to 5 minutes
   for (let i = 0; i < 60; i++) {
     await new Promise(r => setTimeout(r, 5000));
     const pollRes = await fetch(`${API_BASE}/${opData.name}?key=${GEMINI_KEY}`);
-    const result = await pollRes.json();
+    const result  = await pollRes.json();
     console.log(`Poll ${i + 1}: done=${result.done}`);
     if (!result.done) continue;
 
     if (result.error) throw new Error('Veo error: ' + result.error.message);
 
-    // Check for RAI filter
     const filtered = result.response?.generateVideoResponse?.raiMediaFilteredCount;
     if (filtered && filtered > 0) {
       const reasons = result.response?.generateVideoResponse?.raiMediaFilteredReasons;
@@ -206,81 +229,300 @@ async function generateVeoVideo(styledFrameB64, motionPrompt, aspectRatio, durat
   throw new Error('Veo timed out');
 }
 
-// ── Main route ────────────────────────────────────────────────────────────────
+// ── Pipeline (runs async after upload) ───────────────────────────────────────
 
-app.post('/upload', upload.single('video'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ success: false, error: 'No file received' });
-
-  const videoPath = req.file.path;
-  const style = req.body.style || 'cyberpunk';
-  const ts = Date.now();
-  const framesDir = path.join(__dirname, 'outputs', `frames_${ts}`);
+async function runPipeline(jobId, videoPath, style, ts) {
+  const framesDir  = path.join(__dirname, 'outputs', `frames_${ts}`);
   const outputPath = path.join(__dirname, 'outputs', `transformed_${ts}.mp4`);
-
   fs.mkdirSync(framesDir, { recursive: true });
 
-  console.log('\n=== New request ===');
-  console.log('Video:', videoPath, '| Style:', style);
-
-  // Get video info
   let videoInfo;
   try {
     videoInfo = await getVideoInfo(videoPath);
     console.log(`${videoInfo.duration.toFixed(1)}s ${videoInfo.width}x${videoInfo.height}`);
   } catch (err) {
-    return res.json({ success: false, error: 'Could not read video: ' + err.message });
+    setStep(jobId, -1, { error: 'Could not read video: ' + err.message });
+    return;
   }
 
   const aspectRatio = videoInfo.width < videoInfo.height ? '9:16' : '16:9';
 
-  // Extract just the first frame + analyze full video in parallel
+  // Step 1: Analyze
+  setStep(jobId, 1);
   let framePaths, narration, motionPrompt;
   try {
     [[framePaths], { narration, motionPrompt }] = await Promise.all([
-      extractFrames(videoPath, framesDir, 1).then(f => [f]), // 1fps, just need first frame
+      extractFrames(videoPath, framesDir, 1).then(f => [f]),
       analyzeVideo(videoPath, style),
     ]);
-    console.log('Analysis done. Motion prompt ready.');
+    console.log('Analysis done.');
   } catch (err) {
-    return res.json({ success: false, error: 'Analysis failed: ' + err.message });
+    setStep(jobId, -1, { error: 'Analysis failed: ' + err.message });
+    return;
   }
 
-  // Generate styled first frame with Imagen
+  // Step 2: Style frame
+  setStep(jobId, 2);
   let styledFrameB64;
   try {
     console.log('Generating styled reference frame with Imagen...');
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const model       = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
     const framePrompt = await buildFirstFramePrompt(framePaths[0], style, model);
-    console.log('Frame prompt:', framePrompt.slice(0, 100) + '...');
-    styledFrameB64 = await generateStyledFrame(framePrompt, aspectRatio);
+    styledFrameB64    = await generateStyledFrame(framePrompt, aspectRatio);
     console.log('Styled frame ready.');
   } catch (err) {
-    return res.json({ success: false, error: 'Imagen frame failed: ' + err.message });
+    setStep(jobId, -1, { error: 'Imagen frame failed: ' + err.message });
+    return;
   }
 
-  // Veo: styled image → full video with motion
+  // Step 3: Veo
+  setStep(jobId, 3);
   let videoBuffer;
   try {
-    const veoDuration = Math.min(8, Math.max(4, Math.round(videoInfo.duration)));
-    videoBuffer = await generateVeoVideo(styledFrameB64, motionPrompt, aspectRatio, veoDuration);
+    videoBuffer = await generateVeoVideo(styledFrameB64, motionPrompt, aspectRatio);
     fs.writeFileSync(outputPath, videoBuffer);
     console.log('Veo video saved:', outputPath, `(${(videoBuffer.length / 1024 / 1024).toFixed(1)}MB)`);
   } catch (err) {
     console.error('Veo error:', err.message);
-    // Fallback: return the styled frame as a still image if Veo fails
-    return res.json({ success: false, narration, error: 'Veo failed: ' + err.message });
+    setStep(jobId, -1, { error: 'Veo failed: ' + err.message });
+    return;
   }
 
-  // Cleanup
+  // Cleanup frames
   framePaths.forEach(f => { try { fs.unlinkSync(f); } catch {} });
   try { fs.rmdirSync(framesDir); } catch {}
 
-  res.json({
-    success: true,
-    narration,
-    style,
-    transformedVideoUrl: `/outputs/transformed_${ts}.mp4`,
+  // Step 4: Done
+  setStep(jobId, 4, {
+    result: {
+      narration,
+      style,
+      transformedVideoUrl: `/outputs/transformed_${ts}.mp4`,
+    },
   });
+}
+
+// ── Edit pipeline: ffmpeg stitch ──────────────────────────────────────────────
+
+function pickTransition(vibe) {
+  const v = (vibe || '').toLowerCase();
+  if (v.match(/glitch|hack|cyber|tech/))          return 'pixelize';
+  if (v.match(/fast|hype|fire|energy|lit|hard/))  return 'wipeleft';
+  if (v.match(/dream|chill|slow|soft|calm|lo.?fi/)) return 'dissolve';
+  if (v.match(/retro|vhs|vintage|80s/))           return 'fadeblack';
+  return 'fade';
+}
+
+function hasAudioStream(videoPath) {
+  return new Promise((resolve) => {
+    ffmpeg.ffprobe(videoPath, (err, meta) => {
+      if (err) return resolve(false);
+      resolve(meta.streams.some(s => s.codec_type === 'audio'));
+    });
+  });
+}
+
+function stitchClips(videoPaths, infos, vibe, outputPath) {
+  return new Promise(async (resolve, reject) => {
+    const T          = 0.5;
+    const transition = pickTransition(vibe);
+    const N          = videoPaths.length;
+
+    // Even-number target dims from first clip
+    const targetW = infos[0].width  % 2 === 0 ? infos[0].width  : infos[0].width  - 1;
+    const targetH = infos[0].height % 2 === 0 ? infos[0].height : infos[0].height - 1;
+
+    if (N === 1) {
+      return ffmpeg(videoPaths[0])
+        .outputOptions(['-c:v libx264', '-crf 22', '-preset fast', '-c:a aac', '-ar 44100', '-movflags +faststart'])
+        .output(outputPath)
+        .on('end', resolve)
+        .on('error', reject)
+        .run();
+    }
+
+    // Check which clips have audio
+    const audioFlags = await Promise.all(videoPaths.map(hasAudioStream));
+    const allHaveAudio = audioFlags.every(Boolean);
+
+    // Optional background music (drop mp3s in backend/music/ named hype/chill/cinematic/retro/default)
+    const musicDir = path.join(__dirname, 'music');
+    let musicFile = null;
+    if (fs.existsSync(musicDir)) {
+      const vibeKey = (vibe || '').toLowerCase();
+      const trackMap = { hype: /fast|hype|fire|energy|lit/, chill: /chill|calm|soft|lo.?fi/, cinematic: /cinematic|epic|dramatic/, retro: /retro|vhs|vintage/ };
+      for (const [name, re] of Object.entries(trackMap)) {
+        const f = path.join(musicDir, `${name}.mp3`);
+        if (re.test(vibeKey) && fs.existsSync(f)) { musicFile = f; break; }
+      }
+      if (!musicFile) {
+        const def = path.join(musicDir, 'default.mp3');
+        if (fs.existsSync(def)) musicFile = def;
+      }
+    }
+
+    let cmd = ffmpeg();
+    videoPaths.forEach(p => cmd = cmd.input(p));
+    if (musicFile) cmd = cmd.input(musicFile);
+    const musicIdx = N; // index of music input if present
+
+    const filters = [];
+
+    // Normalize each clip: scale + pad + fps
+    for (let i = 0; i < N; i++) {
+      filters.push(
+        `[${i}:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,` +
+        `pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2,fps=30,setsar=1[nv${i}]`
+      );
+    }
+
+    // xfade chain for video
+    let prevV = 'nv0', sumDur = 0;
+    for (let i = 1; i < N; i++) {
+      sumDur += infos[i - 1].duration;
+      const offset = Math.max(0.1, sumDur - i * T).toFixed(3);
+      const out = i === N - 1 ? 'vout' : `xv${i}`;
+      filters.push(`[${prevV}][nv${i}]xfade=transition=${transition}:duration=${T}:offset=${offset}[${out}]`);
+      prevV = out;
+    }
+
+    // Audio chain
+    const totalDur = infos.reduce((s, info) => s + info.duration, 0) - (N - 1) * T;
+    let audioOutLabel = null;
+    if (allHaveAudio) {
+      let prevA = '0:a';
+      for (let i = 1; i < N; i++) {
+        const out = i === N - 1 ? (musicFile ? 'aclips' : 'aout') : `xa${i}`;
+        filters.push(`[${prevA}][${i}:a]acrossfade=d=${T}[${out}]`);
+        prevA = out;
+      }
+      audioOutLabel = musicFile ? 'aclips' : 'aout';
+    }
+
+    if (musicFile) {
+      const looped = `[${musicIdx}:a]aloop=loop=-1:size=2e+09,volume=0.25,atrim=0:${totalDur.toFixed(3)}[amusic]`;
+      filters.push(looped);
+      if (audioOutLabel) {
+        filters.push(`[${audioOutLabel}][amusic]amix=inputs=2:duration=first[aout]`);
+      } else {
+        filters.push(`[amusic]acopy[aout]`);
+      }
+      audioOutLabel = 'aout';
+    }
+
+    const mapOpts = ['-map [vout]'];
+    const encOpts = ['-c:v libx264', '-crf 22', '-preset fast', '-movflags +faststart'];
+    if (audioOutLabel) {
+      mapOpts.push(`-map [${audioOutLabel}]`);
+      encOpts.push('-c:a aac', '-ar 44100');
+    }
+
+    cmd
+      .complexFilter(filters)
+      .outputOptions([...mapOpts, ...encOpts])
+      .output(outputPath)
+      .on('end', resolve)
+      .on('error', reject)
+      .run();
+  });
+}
+
+async function runEditPipeline(jobId, videoPaths, vibe, ts) {
+  const outputPath = path.join(__dirname, 'outputs', `edit_${ts}.mp4`);
+
+  // Step 1: Get clip info + generate caption in parallel
+  setStep(jobId, 1);
+  let infos, narration;
+  try {
+    [infos, narration] = await Promise.all([
+      Promise.all(videoPaths.map(p => getVideoInfo(p))),
+      (async () => {
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+        const res = await model.generateContent(
+          `Write a short energetic 1-2 sentence caption for a video edit made from ${videoPaths.length} clip${videoPaths.length !== 1 ? 's' : ''}${vibe ? ` with the vibe: "${vibe}"` : ''}. Be hype and brief.`
+        );
+        return res.response.text().trim();
+      })().catch(() => `${videoPaths.length} clips${vibe ? ` — ${vibe}` : ''}`),
+    ]);
+    console.log(`Edit: ${videoPaths.length} clips ready`);
+  } catch (err) {
+    setStep(jobId, -1, { error: 'Could not read clips: ' + err.message });
+    return;
+  }
+
+  // Step 2: Pick transition style
+  setStep(jobId, 2);
+  const transition = pickTransition(vibe);
+  console.log(`Edit: transition="${transition}" vibe="${vibe}"`);
+
+  // Step 3: Stitch clips with ffmpeg
+  setStep(jobId, 3);
+  try {
+    await stitchClips(videoPaths, infos, vibe, outputPath);
+    console.log('Edit: stitched video saved:', outputPath);
+  } catch (err) {
+    console.error('Stitch error:', err.message);
+    setStep(jobId, -1, { error: 'Stitch failed: ' + err.message });
+    return;
+  }
+
+  // Cleanup uploads
+  videoPaths.forEach(p => { try { fs.unlinkSync(p); } catch {} });
+
+  setStep(jobId, 4, {
+    result: {
+      narration,
+      style: vibe || 'cinematic',
+      transformedVideoUrl: `/outputs/edit_${ts}.mp4`,
+    },
+  });
+}
+
+// ── Routes ────────────────────────────────────────────────────────────────────
+
+app.post('/upload', upload.single('video'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file received' });
+
+  const videoPath = req.file.path;
+  const style     = req.body.style || 'cyberpunk';
+  const ts        = Date.now();
+  const jobId     = `job_${ts}`;
+
+  console.log('\n=== New job:', jobId, '| Style:', style);
+
+  // Acknowledge immediately
+  setStep(jobId, 0);
+  res.json({ jobId });
+
+  // Run pipeline in background
+  runPipeline(jobId, videoPath, style, ts).catch(err => {
+    console.error('Pipeline crash:', err);
+    setStep(jobId, -1, { error: err.message });
+  });
+});
+
+app.post('/edit', upload.array('clips', 10), (req, res) => {
+  if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No clips received' });
+
+  const vibe  = req.body.vibe || '';
+  const ts    = Date.now();
+  const jobId = `job_${ts}`;
+
+  console.log('\n=== New edit job:', jobId, '| Clips:', req.files.length, '| Vibe:', vibe);
+
+  setStep(jobId, 0);
+  res.json({ jobId });
+
+  runEditPipeline(jobId, req.files.map(f => f.path), vibe, ts).catch(err => {
+    console.error('Edit pipeline crash:', err);
+    setStep(jobId, -1, { error: err.message });
+  });
+});
+
+app.get('/status/:jobId', (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  res.json(job);
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
