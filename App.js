@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   Text, View, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, Image, Dimensions, SafeAreaView, Animated, Keyboard, ActivityIndicator,
+  TextInput, Image, Dimensions, SafeAreaView, Animated, Keyboard, ActivityIndicator, PanResponder,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -25,6 +25,15 @@ const EDIT_STATUS = [
   'Stitching your edit…',
 ];
 
+const SCREEN_PARENT = {
+  clipChoice:    'home',
+  style:         'clipChoice',
+  editUpload:    'home',
+  editPrompt:    'editUpload',
+  library:       'home',
+  libraryPlayer: 'library',
+};
+
 const STYLES = [
   { id: 'cyberpunk', label: 'Cyberpunk', bg: '#211535' },
   { id: 'noir',      label: 'Noir',      bg: '#1c1c1c' },
@@ -47,8 +56,9 @@ const C = {
   record:    '#e05555',
 };
 
-const CARD_W = (SW - 40 - 12) / 2;
-const CLIP_W = (SW - 40 - 12) / 2;
+const CARD_W      = (SW - 40 - 12) / 2;
+const CLIP_W      = (SW - 40 - 12) / 2;
+const EDIT_TILE_W = (SW - 40 - 16) / 3;
 
 export default function App() {
   const [screen, setScreen]             = useState('home');
@@ -73,9 +83,13 @@ export default function App() {
   const [showLibOriginal, setShowLibOriginal]   = useState(false);
   const [saveMsg, setSaveMsg]                   = useState('');
 
-  const pollingRef = useRef(false);
+  const pollingRef   = useRef(false);
+  const screenRef    = useRef(screen);
+  const navigateRef  = useRef(null);
+  screenRef.current  = screen;
 
   const slideAnim    = useRef(new Animated.Value(0)).current;
+  const panAnim      = useRef(new Animated.Value(0)).current;
   const backdropAnim = useRef(new Animated.Value(0)).current;
   const modalAnim    = useRef(new Animated.Value(400)).current;
   const tabAnim      = useRef(new Animated.Value(0)).current;
@@ -110,8 +124,30 @@ export default function App() {
   function goTo(newScreen, direction = 'forward') {
     slideAnim.setValue(direction === 'forward' ? SW : -SW);
     setScreen(newScreen);
-    Animated.spring(slideAnim, { toValue: 0, tension: 60, friction: 11, useNativeDriver: true }).start();
+    Animated.spring(slideAnim, { toValue: 0, tension: 60, friction: 11, useNativeDriver: false }).start();
   }
+
+  navigateRef.current = goTo;
+
+  const panResponder = useRef(PanResponder.create({
+    onMoveShouldSetPanResponder: (evt, g) =>
+      evt.nativeEvent.pageX < 40 && g.dx > 8 && Math.abs(g.dx) > Math.abs(g.dy),
+    onPanResponderMove: (_, g) => {
+      if (g.dx > 0) panAnim.setValue(g.dx);
+    },
+    onPanResponderRelease: (_, g) => {
+      const parent = SCREEN_PARENT[screenRef.current];
+      if ((g.dx > SW * 0.35 || g.vx > 0.5) && parent) {
+        panAnim.setValue(0);
+        navigateRef.current(parent, 'back');
+      } else {
+        Animated.spring(panAnim, { toValue: 0, tension: 80, friction: 12, useNativeDriver: false }).start();
+      }
+    },
+    onPanResponderTerminate: () => {
+      Animated.spring(panAnim, { toValue: 0, tension: 80, friction: 12, useNativeDriver: false }).start();
+    },
+  })).current;
 
   function openModal() {
     Animated.parallel([
@@ -365,10 +401,10 @@ export default function App() {
   const libTabIndicatorX  = libTabAnim.interpolate({ inputRange: [0, 1], outputRange: [3, TAB_W + 3] });
 
   return (
-    <View style={{ flex: 1, backgroundColor: C.bg }}>
+    <View style={{ flex: 1, backgroundColor: C.bg }} {...panResponder.panHandlers}>
       <StatusBar style="light" />
 
-      <Animated.View style={{ flex: 1, transform: [{ translateX: slideAnim }] }}>
+      <Animated.View style={{ flex: 1, transform: [{ translateX: Animated.add(slideAnim, panAnim) }] }}>
 
         {/* ── Home ── */}
         {screen === 'home' && (
@@ -491,75 +527,77 @@ export default function App() {
 
         {/* ── Edit Upload ── */}
         {screen === 'editUpload' && (
-          <SafeAreaView style={s.bg}>
-            <ScrollView contentContainerStyle={s.stylePad} keyboardShouldPersistTaps="handled">
-              <View style={s.rowHeader}>
-                <TouchableOpacity onPress={() => goTo('home', 'back')}>
-                  <Text style={s.backLink}>← Back</Text>
-                </TouchableOpacity>
-                <Text style={s.sectionLabel}>Edit Maker</Text>
-              </View>
+          <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
+            <View style={s.editWrap}>
+              <TouchableOpacity onPress={() => goTo('home', 'back')}>
+                <Text style={s.backLink}>← Back</Text>
+              </TouchableOpacity>
+              <Text style={s.editTitle}>Edit Maker</Text>
+              <Text style={s.editSub}>Select up to 10 clips to cut into one edit.</Text>
 
               {editClips.length === 0 ? (
-                <View style={s.emptyClips}>
-                  <Text style={s.emptyClipsTitle}>No clips yet</Text>
-                  <Text style={s.ghost}>Tap below to select videos</Text>
+                <View style={s.editEmptyCenter}>
+                  <TouchableOpacity style={s.addCircle} onPress={handleAddClips} activeOpacity={0.8}>
+                    <Text style={s.addCircleIcon}>+</Text>
+                    <Text style={s.addCircleLabel}>Add Clips</Text>
+                  </TouchableOpacity>
                 </View>
               ) : (
-                <View style={s.clipGrid}>
-                  {editClips.map((clip, i) => (
-                    <View key={i} style={s.clipItem}>
-                      <Image source={{ uri: clip.uri }} style={s.clipThumb} resizeMode="cover" />
-                      <TouchableOpacity
-                        style={s.clipRemoveBtn}
-                        onPress={() => setEditClips(prev => prev.filter((_, j) => j !== i))}
-                      >
-                        <Text style={s.clipRemoveText}>✕</Text>
-                      </TouchableOpacity>
-                      <View style={s.clipNumBadge}>
-                        <Text style={s.clipNumText}>{i + 1}</Text>
+                <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+                  <View style={s.editGrid}>
+                    {editClips.map((clip, i) => (
+                      <View key={i} style={s.editTile}>
+                        <Image source={{ uri: clip.uri }} style={s.editTileImg} resizeMode="cover" />
+                        <TouchableOpacity
+                          style={s.editTileRemove}
+                          onPress={() => setEditClips(prev => prev.filter((_, j) => j !== i))}
+                        >
+                          <Text style={s.editTileRemoveText}>✕</Text>
+                        </TouchableOpacity>
+                        <View style={s.editTileNum}>
+                          <Text style={s.editTileNumText}>{i + 1}</Text>
+                        </View>
                       </View>
-                    </View>
-                  ))}
-                </View>
+                    ))}
+                    {editClips.length < 10 && (
+                      <TouchableOpacity style={s.editTileAdd} onPress={handleAddClips} activeOpacity={0.7}>
+                        <Text style={s.editTileAddIcon}>+</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </ScrollView>
               )}
-
-              <TouchableOpacity
-                style={s.outlineBtn}
-                onPress={handleAddClips}
-                disabled={editClips.length >= 10}
-              >
-                <Text style={s.outlineBtnText}>
-                  {editClips.length === 0 ? 'Add clips' : `Add more  (${editClips.length}/10)`}
-                </Text>
-              </TouchableOpacity>
 
               {editClips.length > 0 && (
-                <TouchableOpacity style={s.primaryBtn} onPress={() => goTo('editPrompt')}>
-                  <Text style={s.primaryBtnText}>Next</Text>
+                <TouchableOpacity style={[s.primaryBtn, { marginTop: 12 }]} onPress={() => goTo('editPrompt')}>
+                  <Text style={s.primaryBtnText}>Next  →</Text>
                 </TouchableOpacity>
               )}
-            </ScrollView>
+            </View>
           </SafeAreaView>
         )}
 
         {/* ── Edit Prompt ── */}
         {(screen === 'editPrompt' || (screen === 'processing' && mode === 'edit')) && (
-          <SafeAreaView style={s.bg}>
-            <ScrollView contentContainerStyle={s.stylePad} keyboardShouldPersistTaps="handled">
-              <View style={s.rowHeader}>
+          <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
+            <ScrollView contentContainerStyle={s.editPromptPad} keyboardShouldPersistTaps="handled">
+              <View style={s.editPromptHeader}>
                 <TouchableOpacity onPress={() => goTo('editUpload', 'back')}>
                   <Text style={s.backLink}>← Back</Text>
                 </TouchableOpacity>
-                <Text style={s.sectionLabel}>{editClips.length} clip{editClips.length !== 1 ? 's' : ''} selected</Text>
+                <View style={s.editClipBadge}>
+                  <Text style={s.editClipBadgeText}>{editClips.length} clip{editClips.length !== 1 ? 's' : ''}</Text>
+                </View>
               </View>
+
+              <Text style={s.editTitle}>Set the vibe.</Text>
+              <Text style={s.editSub}>Describe the energy, or name an artist or song.</Text>
 
               {styleError ? <Text style={s.errorText}>{styleError}</Text> : null}
 
-              <Text style={s.sectionLabel}>Describe the vibe</Text>
               <TextInput
-                style={[s.input, { height: 110, textAlignVertical: 'top', paddingTop: 12 }]}
-                placeholder="fast cuts, neon lighting, hip hop energy... or name an artist/song"
+                style={s.vibeInput}
+                placeholder={'fast cuts, neon lighting...\nor  "like Travis Scott"'}
                 placeholderTextColor={C.textFaint}
                 value={editVibe}
                 onChangeText={setEditVibe}
@@ -883,4 +921,29 @@ const s = StyleSheet.create({
   libPlayerHeader:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
   libPlayerBack:    { width: 60 },
   libPlayerTitle:   { flex: 1, textAlign: 'center', fontSize: 13, fontWeight: '600', color: C.text, letterSpacing: 0.5 },
+
+  // Edit Maker — Upload screen
+  editWrap:         { flex: 1, padding: 24, paddingTop: 12, gap: 12 },
+  editTitle:        { fontSize: 28, fontWeight: '700', color: C.text, marginTop: 8 },
+  editSub:          { fontSize: 14, color: C.textMid, lineHeight: 22 },
+  editEmptyCenter:  { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  addCircle:        { width: 140, height: 140, borderRadius: 70, backgroundColor: C.accent, alignItems: 'center', justifyContent: 'center', gap: 4, shadowColor: C.accent, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.4, shadowRadius: 24 },
+  addCircleIcon:    { fontSize: 36, color: '#080808', fontWeight: '300', lineHeight: 40 },
+  addCircleLabel:   { fontSize: 13, fontWeight: '700', color: '#080808', letterSpacing: 0.5 },
+  editGrid:         { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingBottom: 16 },
+  editTile:         { width: EDIT_TILE_W, height: EDIT_TILE_W, borderRadius: 12, position: 'relative', overflow: 'hidden' },
+  editTileImg:      { width: '100%', height: '100%', backgroundColor: C.surface },
+  editTileRemove:   { position: 'absolute', top: 5, right: 5, width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', zIndex: 10 },
+  editTileRemoveText:{ fontSize: 10, color: C.text, fontWeight: '700' },
+  editTileNum:      { position: 'absolute', bottom: 6, left: 7, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  editTileNumText:  { fontSize: 10, color: C.text, fontWeight: '600' },
+  editTileAdd:      { width: EDIT_TILE_W, height: EDIT_TILE_W, borderRadius: 12, borderWidth: 1, borderColor: C.border, borderStyle: 'dashed', backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center' },
+  editTileAddIcon:  { fontSize: 28, color: C.textMid, fontWeight: '300' },
+
+  // Edit Maker — Prompt screen
+  editPromptPad:    { padding: 24, gap: 18, paddingBottom: 52 },
+  editPromptHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  editClipBadge:    { backgroundColor: C.surface, borderRadius: 20, borderWidth: 1, borderColor: C.border, paddingHorizontal: 12, paddingVertical: 5 },
+  editClipBadgeText:{ fontSize: 12, color: C.textMid, fontWeight: '600' },
+  vibeInput:        { borderWidth: 1, borderColor: C.border, borderRadius: 16, padding: 16, fontSize: 15, color: C.text, backgroundColor: C.surface, height: 140, textAlignVertical: 'top' },
 });
