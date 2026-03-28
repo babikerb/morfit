@@ -18,8 +18,8 @@ const CLIP_STATUS = [
 ];
 const EDIT_STATUS = [
   'Uploading your clips…',
-  'Reading clip info…',
-  'Choosing transitions…',
+  'Reading clips…',
+  'Finding music…',
   'Stitching your edit…',
 ];
 // Progress target per backend step (0=uploading, 1=analyze, 2=style, 3=generate, 4=done)
@@ -479,7 +479,7 @@ export default function App() {
               <Text style={s.sectionLabel}>Describe the vibe</Text>
               <TextInput
                 style={[s.input, { height: 110, textAlignVertical: 'top', paddingTop: 12 }]}
-                placeholder="fast cuts, neon lighting, hip hop energy..."
+                placeholder="fast cuts, neon lighting, hip hop energy... or name an artist/song"
                 placeholderTextColor={C.textFaint}
                 value={editVibe}
                 onChangeText={setEditVibe}

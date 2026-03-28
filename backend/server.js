@@ -1,11 +1,12 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 
-const express = require('express');
-const multer  = require('multer');
-const cors    = require('cors');
-const path    = require('path');
-const fs      = require('fs');
-const ffmpeg  = require('fluent-ffmpeg');
+const express      = require('express');
+const multer       = require('multer');
+const cors         = require('cors');
+const path         = require('path');
+const fs           = require('fs');
+const ffmpeg       = require('fluent-ffmpeg');
+const { execSync } = require('child_process');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleAIFileManager } = require('@google/generative-ai/server');
 
@@ -313,62 +314,146 @@ function pickTransition(vibe) {
   return 'fade';
 }
 
-function hasAudioStream(videoPath) {
-  return new Promise((resolve) => {
-    ffmpeg.ffprobe(videoPath, (err, meta) => {
-      if (err) return resolve(false);
-      resolve(meta.streams.some(s => s.codec_type === 'audio'));
-    });
-  });
+// ── Music selection ───────────────────────────────────────────────────────────
+
+// Parse vibe string for a specific artist or song to search for.
+// Returns a yt-dlp search query string, or null if none found.
+function parseArtistSong(vibe) {
+  const v = vibe || '';
+  let m;
+  // "song: X" or "artist: X"
+  m = v.match(/song:\s*([^,\n]+)/i);  if (m) return m[1].trim() + ' official audio';
+  m = v.match(/artist:\s*([^,\n]+)/i); if (m) return m[1].trim() + ' music';
+  // "Artist - Song"
+  m = v.match(/^([^,\n]+?)\s+-\s+([^,\n]+)/);
+  if (m) return `${m[1].trim()} ${m[2].trim()} audio`;
+  // "in the style of X" / "like X" / "X vibe"
+  m = v.match(/(?:in the style of|like|inspired by)\s+([a-zA-Z0-9\s]+?)(?:\s*,|$)/i);
+  if (m) return m[1].trim() + ' background music';
+  return null;
 }
 
-function stitchClips(videoPaths, infos, vibe, outputPath) {
-  return new Promise(async (resolve, reject) => {
+function ytdlpAvailable() {
+  try { execSync('which yt-dlp', { stdio: 'ignore' }); return true; }
+  catch { return false; }
+}
+
+// Lyria 2 via Vertex AI.
+// Requires: npm install google-auth-library  +  GOOGLE_CLOUD_PROJECT in .env
+// + gcloud auth application-default login (or service account key)
+async function generateLyriaMusic(prompt, durationSecs) {
+  const projectId = process.env.GOOGLE_CLOUD_PROJECT;
+  if (!projectId) throw new Error('GOOGLE_CLOUD_PROJECT not set');
+  // google-auth-library is not installed by default — add it first
+  const { GoogleAuth } = require('google-auth-library');
+  const auth  = new GoogleAuth({ scopes: 'https://www.googleapis.com/auth/cloud-platform' });
+  const token = await auth.getAccessToken();
+  const res = await fetch(
+    `https://us-central1-aiplatform.googleapis.com/v1/projects/${projectId}/locations/us-central1/publishers/google/models/lyria-002:predict`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        instances:  [{ prompt, durationSeconds: Math.min(30, Math.ceil(durationSecs)) }],
+        parameters: { sampleCount: 1 },
+      }),
+    }
+  );
+  const data = await res.json();
+  if (!data.predictions?.[0]?.bytesBase64Encoded) throw new Error('Lyria no audio: ' + JSON.stringify(data).slice(0, 200));
+  return Buffer.from(data.predictions[0].bytesBase64Encoded, 'base64');
+}
+
+// Returns path to a music file, or null if nothing found.
+async function findMusic(vibe, totalDur, ts) {
+  // 1. yt-dlp — specific artist/song from vibe string
+  const query = parseArtistSong(vibe);
+  if (query && ytdlpAvailable()) {
+    const out = path.join(__dirname, 'uploads', `music_${ts}.mp3`);
+    try {
+      execSync(
+        `yt-dlp -x --audio-format mp3 --audio-quality 5 --no-playlist -o "${out}" "ytsearch1:${query}"`,
+        { timeout: 60000, stdio: 'pipe' }
+      );
+      if (fs.existsSync(out)) { console.log(`Music: yt-dlp "${query}"`); return out; }
+    } catch (err) { console.warn('yt-dlp failed:', err.message); }
+  }
+
+  // 2. Pre-bundled tracks in backend/music/
+  const musicDir = path.join(__dirname, 'music');
+  if (fs.existsSync(musicDir)) {
+    const vibeKey = (vibe || '').toLowerCase();
+    const trackMap = { hype: /fast|hype|fire|energy|lit/, chill: /chill|calm|soft|lo.?fi/, cinematic: /cinematic|epic|dramatic/, retro: /retro|vhs|vintage/ };
+    for (const [name, re] of Object.entries(trackMap)) {
+      const f = path.join(musicDir, `${name}.mp3`);
+      if (re.test(vibeKey) && fs.existsSync(f)) { console.log(`Music: bundled ${name}.mp3`); return f; }
+    }
+    const def = path.join(musicDir, 'default.mp3');
+    if (fs.existsSync(def)) { console.log('Music: bundled default.mp3'); return def; }
+  }
+
+  // 3. Lyria 2 via Vertex AI (needs google-auth-library + GOOGLE_CLOUD_PROJECT)
+  if (process.env.GOOGLE_CLOUD_PROJECT) {
+    try {
+      const prompt = `Instrumental background music for a video edit. Vibe: ${vibe || 'energetic, cinematic'}. No vocals.`;
+      const buf = await generateLyriaMusic(prompt, totalDur);
+      const out = path.join(__dirname, 'uploads', `music_${ts}.mp3`);
+      fs.writeFileSync(out, buf);
+      console.log('Music: generated via Lyria');
+      return out;
+    } catch (err) { console.warn('Lyria failed:', err.message); }
+  }
+
+  console.log('Music: none found, edit will be silent');
+  return null;
+}
+
+// ── Stitch (video only from clips — music overlaid separately) ────────────────
+
+function stitchClips(videoPaths, infos, vibe, musicFile, outputPath) {
+  return new Promise((resolve, reject) => {
     const T          = 0.5;
     const transition = pickTransition(vibe);
     const N          = videoPaths.length;
+    const totalDur   = infos.reduce((s, i) => s + i.duration, 0) - (N - 1) * T;
 
     // Even-number target dims from first clip
     const targetW = infos[0].width  % 2 === 0 ? infos[0].width  : infos[0].width  - 1;
     const targetH = infos[0].height % 2 === 0 ? infos[0].height : infos[0].height - 1;
 
-    if (N === 1) {
-      return ffmpeg(videoPaths[0])
-        .outputOptions(['-c:v libx264', '-crf 22', '-preset fast', '-c:a aac', '-ar 44100', '-movflags +faststart'])
-        .output(outputPath)
-        .on('end', resolve)
-        .on('error', reject)
-        .run();
-    }
-
-    // Check which clips have audio
-    const audioFlags = await Promise.all(videoPaths.map(hasAudioStream));
-    const allHaveAudio = audioFlags.every(Boolean);
-
-    // Optional background music (drop mp3s in backend/music/ named hype/chill/cinematic/retro/default)
-    const musicDir = path.join(__dirname, 'music');
-    let musicFile = null;
-    if (fs.existsSync(musicDir)) {
-      const vibeKey = (vibe || '').toLowerCase();
-      const trackMap = { hype: /fast|hype|fire|energy|lit/, chill: /chill|calm|soft|lo.?fi/, cinematic: /cinematic|epic|dramatic/, retro: /retro|vhs|vintage/ };
-      for (const [name, re] of Object.entries(trackMap)) {
-        const f = path.join(musicDir, `${name}.mp3`);
-        if (re.test(vibeKey) && fs.existsSync(f)) { musicFile = f; break; }
-      }
-      if (!musicFile) {
-        const def = path.join(musicDir, 'default.mp3');
-        if (fs.existsSync(def)) musicFile = def;
-      }
-    }
-
     let cmd = ffmpeg();
     videoPaths.forEach(p => cmd = cmd.input(p));
     if (musicFile) cmd = cmd.input(musicFile);
-    const musicIdx = N; // index of music input if present
+    const musicIdx = N;
+
+    if (N === 1) {
+      const opts = ['-c:v libx264', '-crf 22', '-preset fast', '-movflags +faststart', '-an'];
+      if (musicFile) {
+        // Single clip + music
+        cmd
+          .complexFilter([
+            `[0:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2,fps=30,setsar=1[vout]`,
+            `[${musicIdx}:a]aloop=loop=-1:size=2e+09,volume=0.5,atrim=0:${totalDur.toFixed(3)}[aout]`,
+          ])
+          .outputOptions(['-map [vout]', '-map [aout]', '-c:v libx264', '-crf 22', '-preset fast', '-c:a aac', '-ar 44100', '-movflags +faststart'])
+          .output(outputPath)
+          .on('end', resolve)
+          .on('error', reject)
+          .run();
+      } else {
+        ffmpeg(videoPaths[0])
+          .outputOptions(['-c:v libx264', '-crf 22', '-preset fast', '-movflags +faststart', '-an'])
+          .output(outputPath)
+          .on('end', resolve)
+          .on('error', reject)
+          .run();
+      }
+      return;
+    }
 
     const filters = [];
 
-    // Normalize each clip: scale + pad + fps
+    // Normalize each clip — video only (strip original audio)
     for (let i = 0; i < N; i++) {
       filters.push(
         `[${i}:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,` +
@@ -376,7 +461,7 @@ function stitchClips(videoPaths, infos, vibe, outputPath) {
       );
     }
 
-    // xfade chain for video
+    // xfade chain
     let prevV = 'nv0', sumDur = 0;
     for (let i = 1; i < N; i++) {
       sumDur += infos[i - 1].duration;
@@ -386,34 +471,12 @@ function stitchClips(videoPaths, infos, vibe, outputPath) {
       prevV = out;
     }
 
-    // Audio chain
-    const totalDur = infos.reduce((s, info) => s + info.duration, 0) - (N - 1) * T;
-    let audioOutLabel = null;
-    if (allHaveAudio) {
-      let prevA = '0:a';
-      for (let i = 1; i < N; i++) {
-        const out = i === N - 1 ? (musicFile ? 'aclips' : 'aout') : `xa${i}`;
-        filters.push(`[${prevA}][${i}:a]acrossfade=d=${T}[${out}]`);
-        prevA = out;
-      }
-      audioOutLabel = musicFile ? 'aclips' : 'aout';
-    }
-
-    if (musicFile) {
-      const looped = `[${musicIdx}:a]aloop=loop=-1:size=2e+09,volume=0.25,atrim=0:${totalDur.toFixed(3)}[amusic]`;
-      filters.push(looped);
-      if (audioOutLabel) {
-        filters.push(`[${audioOutLabel}][amusic]amix=inputs=2:duration=first[aout]`);
-      } else {
-        filters.push(`[amusic]acopy[aout]`);
-      }
-      audioOutLabel = 'aout';
-    }
-
     const mapOpts = ['-map [vout]'];
     const encOpts = ['-c:v libx264', '-crf 22', '-preset fast', '-movflags +faststart'];
-    if (audioOutLabel) {
-      mapOpts.push(`-map [${audioOutLabel}]`);
+
+    if (musicFile) {
+      filters.push(`[${musicIdx}:a]aloop=loop=-1:size=2e+09,volume=0.5,atrim=0:${totalDur.toFixed(3)}[aout]`);
+      mapOpts.push('-map [aout]');
       encOpts.push('-c:a aac', '-ar 44100');
     }
 
@@ -450,15 +513,16 @@ async function runEditPipeline(jobId, videoPaths, vibe, ts) {
     return;
   }
 
-  // Step 2: Pick transition style
+  // Step 2: Find music (yt-dlp → bundled files → Lyria → silent)
   setStep(jobId, 2);
-  const transition = pickTransition(vibe);
-  console.log(`Edit: transition="${transition}" vibe="${vibe}"`);
+  const totalDur  = infos.reduce((s, i) => s + i.duration, 0);
+  const musicFile = await findMusic(vibe, totalDur, ts);
 
-  // Step 3: Stitch clips with ffmpeg
+  // Step 3: Stitch clips with ffmpeg (clip audio stripped, music overlaid)
   setStep(jobId, 3);
+  let tempMusicFile = musicFile; // track for cleanup
   try {
-    await stitchClips(videoPaths, infos, vibe, outputPath);
+    await stitchClips(videoPaths, infos, vibe, musicFile, outputPath);
     console.log('Edit: stitched video saved:', outputPath);
   } catch (err) {
     console.error('Stitch error:', err.message);
@@ -466,8 +530,11 @@ async function runEditPipeline(jobId, videoPaths, vibe, ts) {
     return;
   }
 
-  // Cleanup uploads
+  // Cleanup uploads + any temp music download
   videoPaths.forEach(p => { try { fs.unlinkSync(p); } catch {} });
+  if (tempMusicFile && tempMusicFile.includes('uploads')) {
+    try { fs.unlinkSync(tempMusicFile); } catch {}
+  }
 
   setStep(jobId, 4, {
     result: {

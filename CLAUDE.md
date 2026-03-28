@@ -52,16 +52,28 @@ npx expo run:ios --device
 - XHR with 6-minute timeout (Veo generation takes 60–120s + upload time)
 - Shows transformed video (expo-video, looping) + Gemini narration card
 
+## Edit Maker — music pipeline
+
+Clip audio is always stripped. Music is found via this priority chain (`findMusic` in server.js):
+
+1. **yt-dlp** (if installed) — user names an artist/song in the vibe field → searches YouTube and pulls the audio. Detection patterns: `"artist: X"`, `"song: X"`, `"X - Y"`, `"in the style of X"`, `"like X"`. Install: `brew install yt-dlp`
+2. **Bundled tracks** — drop mp3s in `backend/music/`: `hype.mp3`, `chill.mp3`, `cinematic.mp3`, `retro.mp3`, `default.mp3`
+3. **Lyria 2** (Google's AI music model, Vertex AI) — needs:
+   - `npm install google-auth-library` in backend
+   - `GOOGLE_CLOUD_PROJECT=your-project-id` in `.env`
+   - `gcloud auth application-default login` (or service account key)
+   - Model: `lyria-002` via `us-central1-aiplatform.googleapis.com`
+   - Called in `generateLyriaMusic()` in server.js — already stubbed, just needs deps
+4. **Silent** — no music if none of the above works
+
+> "nanobanana" — investigate what model/service this refers to and add as option 4
+
 ## What still needs to be done
-- [ ] Better loading UX: step-by-step progress ("Analyzing...", "Styling frame...", "Generating video...") instead of a single status string
 - [ ] Handle videos longer than 8s — either warn user or trim before sending
-- [ ] Show original video preview before/after transformation
-- [ ] Error recovery: if Veo fails, show an error msg
+- [ ] Show original video preview before/after transformation (clip gen)
 - [ ] Clean up old outputs on the backend (disk fills up over time)
 - [ ] Add more styles or let user describe a full scene transformation
-- [ ] Sound/audio: Veo 3 supports audio generation — explore enabling it
-- [ ] Add whole new feature upload alot of clips and be like make me a fire edit as a cool feature (not using filter or another feature)
 - [ ] make ui a hybrid of dark and light theme
 - [ ] add library feature that allows ppl to see videos uploaded along with outputs that are binded to the videos that were uploaded
-- [ ] think about ways to add another track to the edit functionality - tracks are nanobanana, lyra and veo (i cant use veo to edit)
-- [ ] make it get rid of the audio in all the clips so that it could put music ontop aybe use google music to search for music (if they name a specific artist then put it or a specific song)
+- [ ] Install yt-dlp on server machine for music search to work
+- [ ] Set up Lyria via Vertex AI (see music pipeline above)
