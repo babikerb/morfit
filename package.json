@@ -4,15 +4,26 @@
   "main": "index.js",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web"
   },
   "dependencies": {
+    "@expo/ngrok": "^4.0.0",
+    "@google/generative-ai": "^0.24.1",
+    "axios": "^1.14.0",
     "expo": "55.0.10-canary-20260327-0789fbc",
+    "expo-camera": "^55.0.12-canary-20260327-0789fbc",
+    "expo-dev-client": "^55.0.20-canary-20260327-0789fbc",
+    "expo-file-system": "^55.0.13-canary-20260327-0789fbc",
+    "expo-haptics": "^55.0.10-canary-20260327-0789fbc",
+    "expo-image-picker": "^55.0.15-canary-20260327-0789fbc",
+    "expo-media-library": "^55.0.11-canary-20260327-0789fbc",
     "expo-status-bar": "55.0.5-canary-20260327-0789fbc",
+    "expo-video": "^2.0.0",
     "react": "19.2.0",
-    "react-native": "0.83.4"
+    "react-native": "0.83.4",
+"ws": "^8.20.0"
   },
   "private": true
 }
