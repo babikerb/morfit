@@ -466,10 +466,22 @@ async function findMusic(vibe, ts) {
   return null;
 }
 
+// Returns a good start offset into a music file (~30% in = past intro, near first chorus)
+async function getMusicOffset(musicPath, editDuration) {
+  try {
+    const info = await getVideoInfo(musicPath);
+    const songDur = info.duration || 0;
+    if (songDur <= editDuration + 10) return 0; // song too short to skip ahead
+    const target  = songDur * 0.30;
+    const maxSafe = songDur - editDuration - 5;
+    return Math.max(0, Math.min(target, maxSafe));
+  } catch { return 0; }
+}
+
 // ── Stitch: clip audio stripped, color grade + varied transitions + fade in/out + music ──
 
 // trims = [{start, duration}, ...] one per clip
-function stitchClips(videoPaths, trims, infos, vibe, musicFile, outputPath) {
+function stitchClips(videoPaths, trims, infos, vibe, musicFile, musicOffset, outputPath) {
   return new Promise((resolve, reject) => {
     const T           = 0.5;
     const N           = videoPaths.length;
@@ -486,7 +498,7 @@ function stitchClips(videoPaths, trims, infos, vibe, musicFile, outputPath) {
     videoPaths.forEach((p, i) => {
       cmd = cmd.input(p).inputOptions([`-ss ${trims[i].start}`, `-t ${trims[i].duration}`]);
     });
-    if (musicFile) cmd = cmd.input(musicFile);
+    if (musicFile) cmd = cmd.input(musicFile).inputOptions([`-ss ${musicOffset}`]);
     const musicIdx = N;
 
     const filters   = [];
@@ -573,10 +585,14 @@ async function runEditPipeline(jobId, videoPaths, vibe, ts) {
   setStep(jobId, 2);
   const musicFile = await findMusic(vibe, ts);
 
+  const totalEditDur = trims.reduce((s, t) => s + t.duration, 0);
+  const musicOffset  = musicFile ? await getMusicOffset(musicFile, totalEditDur) : 0;
+  if (musicOffset > 0) console.log(`Music: starting at ${musicOffset.toFixed(1)}s (~30% in)`);
+
   // Step 3: Stitch with color grade + varied transitions + fade in/out + music
   setStep(jobId, 3);
   try {
-    await stitchClips(videoPaths, trims, infos, vibe, musicFile, outputPath);
+    await stitchClips(videoPaths, trims, infos, vibe, musicFile, musicOffset, outputPath);
     console.log('Edit: done', outputPath);
   } catch (err) {
     console.error('Stitch error:', err.message);
@@ -643,6 +659,32 @@ app.get('/status/:jobId', (req, res) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+app.get('/library', (_req, res) => {
+  const outputsDir = path.join(__dirname, 'outputs');
+  let files;
+  try { files = fs.readdirSync(outputsDir); }
+  catch { return res.json({ generated: [], edits: [] }); }
+
+  const toItem = (prefix, type) => f => ({
+    id:        f.replace(prefix, '').replace('.mp4', ''),
+    url:       `/outputs/${f}`,
+    type,
+    createdAt: parseInt(f.replace(prefix, '').replace('.mp4', '')) || 0,
+  });
+
+  const generated = files
+    .filter(f => f.startsWith('transformed_') && f.endsWith('.mp4'))
+    .map(toItem('transformed_', 'generated'))
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  const edits = files
+    .filter(f => f.startsWith('edit_') && f.endsWith('.mp4'))
+    .map(toItem('edit_', 'edit'))
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  res.json({ generated, edits });
+});
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Morfit backend running on http://0.0.0.0:${PORT}`);
