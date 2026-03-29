@@ -28,7 +28,7 @@ fs.mkdirSync(path.join(__dirname, 'outputs'), { recursive: true });
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, path.join(__dirname, 'uploads')),
-  filename:    (req, file, cb) => cb(null, `video_${Date.now()}.mp4`),
+  filename:    (req, file, cb) => cb(null, `video_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.mp4`),
 });
 const upload = multer({ storage, limits: { fileSize: 500 * 1024 * 1024 } });
 
@@ -48,6 +48,7 @@ function getVideoInfo(videoPath) {
     ffmpeg.ffprobe(videoPath, (err, meta) => {
       if (err) return reject(err);
       const stream = meta.streams.find(s => s.codec_type === 'video');
+      if (!stream) return reject(new Error('No video stream found in file'));
       resolve({ duration: meta.format.duration, width: stream.width, height: stream.height });
     });
   });
@@ -377,18 +378,6 @@ async function runPipeline(jobId, videoPath, style, ts) {
 
 // ── Edit pipeline: ffmpeg stitch ──────────────────────────────────────────────
 
-// One transition per cut — picks from a vibe-matched pool, cycling through variety
-function getTransitions(count, vibe) {
-  const v = (vibe || '').toLowerCase();
-  let pool;
-  if (v.match(/glitch|hack|cyber|tech/))            pool = ['pixelize', 'fadeblack', 'wipeleft'];
-  else if (v.match(/fast|hype|fire|energy|lit/))    pool = ['wipeleft', 'wiperight', 'slideleft', 'slideright'];
-  else if (v.match(/dream|chill|soft|calm|lo.?fi/)) pool = ['dissolve', 'fade', 'fadegrays'];
-  else if (v.match(/retro|vhs|vintage|80s/))        pool = ['fadeblack', 'pixelize', 'fade'];
-  else                                               pool = ['fade', 'dissolve', 'wipeleft', 'fadeblack'];
-  return Array.from({ length: count }, (_, i) => pool[i % pool.length]);
-}
-
 // Color grade filter string based on vibe
 function getColorGrade(vibe) {
   const v = (vibe || '').toLowerCase();
@@ -557,12 +546,10 @@ async function getMusicOffset(musicPath, editDuration) {
 // trims = [{start, duration}, ...] one per clip
 function stitchClips(videoPaths, trims, infos, vibe, musicFile, musicOffset, outputPath) {
   return new Promise((resolve, reject) => {
-    const T           = 0.5;
     const N           = videoPaths.length;
-    const transitions = getTransitions(N - 1, vibe);
     const colorGrade  = getColorGrade(vibe);
     const trimDurs    = trims.map(t => t.duration);
-    const totalDur    = trimDurs.reduce((s, d) => s + d, 0) - Math.max(0, N - 1) * T;
+    const totalDur    = trimDurs.reduce((s, d) => s + d, 0);
 
     const targetW = infos[0].width  % 2 === 0 ? infos[0].width  : infos[0].width  - 1;
     const targetH = infos[0].height % 2 === 0 ? infos[0].height : infos[0].height - 1;
@@ -607,20 +594,13 @@ function stitchClips(videoPaths, trims, infos, vibe, musicFile, musicOffset, out
       );
     }
 
-    // xfade chain — different transition per cut
-    let prevV = 'nv0', sumDur = 0;
-    for (let i = 1; i < N; i++) {
-      sumDur += trimDurs[i - 1];
-      const offset = Math.max(0.1, sumDur - i * T).toFixed(3);
-      const tr  = transitions[i - 1];
-      const out = i === N - 1 ? 'vxfade' : `xv${i}`;
-      filters.push(`[${prevV}][nv${i}]xfade=transition=${tr}:duration=${T}:offset=${offset}[${out}]`);
-      prevV = out;
-    }
+    // Concat all clips
+    const concatInputs = Array.from({ length: N }, (_, i) => `[nv${i}]`).join('');
+    filters.push(`${concatInputs}concat=n=${N}:v=1:a=0[vconcat]`);
 
     // Fade in at start + fade out at end on the assembled video
     filters.push(
-      `[vxfade]fade=t=in:st=0:d=${fadeInDur},fade=t=out:st=${fadeOutSt}:d=${fadeInDur}[vout]`
+      `[vconcat]fade=t=in:st=0:d=${fadeInDur},fade=t=out:st=${fadeOutSt}:d=${fadeInDur}[vout]`
     );
 
     const mapOpts = ['-map [vout]'];
